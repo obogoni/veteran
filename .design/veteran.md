@@ -3,168 +3,169 @@
 > Plan this with **tlc-plan**.
 > Decisions below carry the literal shape - copy them, do not re-derive them.
 
-Veteran é o "dev sênior veterano" que responde, para pessoas não técnicas, perguntas sobre regras de negócio que só estão documentadas no código. Ele responde na linguagem do negócio, sem entregar trechos de código, nomes internos ou segredos. O projeto é agnóstico de codebase: tudo que é específico de um projeto vive num **perfil** fora deste repositório.
+Veteran is the "veteran senior dev" who answers questions from non-technical people about business rules that are documented only in the code. It answers in business terms and never hands out code snippets, internal names or secrets. It is codebase-agnostic: everything specific to one project lives in a **profile** kept outside this repository.
 
 ## Situation
 
-- Project: não entregue. O repositório está vazio (sem commits), e o remote é `github.com/obogoni/veteran`, pessoal.
-- Decision: construir foi decidido pelo autor em 2026-09-30, a partir de um roadmap de 7 fases (eval set → PoC headless → hardening → serviço → bot → MCP → operação).
-- In flight: já existe, no codebase-alvo, uma skill de "explicação funcional" usada por devs dentro do Claude Code. Ela tem 13 evals de formato (sem resposta de referência e sem casos adversariais) e termina oferecendo "detalhes técnicos sob pedido". O Veteran reaproveita o conteúdo dela (fluxo de análise, regras de estilo, mapa de módulos) como o primeiro perfil, mas **remove essa oferta de detalhes técnicos**.
-- At stake: é um custo, mas não é irreversível. O público é interno (suporte), então vazar um nome de tabela vira ruído, não incidente. Vazar um segredo (connection string, chave de gateway) é irreversível em qualquer caso. O código pertence ao empregador, e isso condiciona **onde** o serviço pode rodar (ver Needs an RFC).
+- Project: not shipped. The repository is empty (no commits) and its remote, `github.com/obogoni/veteran`, is personal.
+- Decision: committed by the author on 2026-09-30, based on a 7-phase roadmap (eval set → headless PoC → hardening → service → bot → MCP → operate).
+- In flight: the target codebase already has a "functional explanation" skill that developers run inside Claude Code. It has 13 format-only evals (no reference answers, no adversarial cases), and it ends every answer by offering "technical details on request". Veteran reuses its content (analysis flow, style rules, module map) as the first profile, but **drops the offer of technical details**.
+- At stake: expensive to get wrong, but not a one-way door. The audience is internal (support), so leaking a table name is noise rather than an incident. Leaking a secret (connection string, gateway key) cannot be undone in any case. The code belongs to the employer, which constrains **where** the service may run (see Needs an RFC).
 
 ## Problem
 
-É um problema de construção sobre uma dor que já existe. Hoje o fluxo é: o suporte pergunta a um dev, o dev roda a skill no Claude Code e repassa a resposta. Quando a resposta contradiz o que o suporte observa, o dev volta à IA e repassa de novo. O dev virou um proxy humano de uma conversa que o suporte poderia ter sozinho.
+This is a construction problem on top of a pain that already exists. Today, support asks a developer, the developer runs the skill in Claude Code and relays the answer. When the answer contradicts what support observes, the developer goes back to the AI and relays again. The developer has become a human proxy for a conversation support could have on its own.
 
-O caso real que motivou o projeto: o suporte perguntou "a devolução de cartão desativa o cartão?". A resposta foi "sim". O suporte respondeu "desativa não", e só depois apareceu que o comportamento depende do tipo do cartão. A falha foi ter respondido sem separar os casos. Vazamento de código não foi o problema.
+The real case behind the project: support asked "does the card return option deactivate the card?". The answer was "yes". Support replied "it doesn't", and only then did it come out that the behavior depends on the card type. The failure was answering without splitting the cases. Leaking code was not the problem.
 
-Existe uma segunda dor: antes de perguntar, o suporte perde tempo **testando cenários na mão**, porque não sabe quais variações importam.
+There is a second pain: before asking, support spends time **testing scenarios by hand**, because nobody tells them which variations matter.
 
-Sem o Veteran, cada dúvida continua custando uma interrupção de dev, mais uma a cada ida e volta, e o suporte continua testando às cegas.
+Without Veteran, every question keeps costing a developer interruption, plus one more for each back-and-forth, and support keeps testing blind.
 
 ## Evidence
 
-- Volume de perguntas por semana e minutos de dev por pergunta: **ninguém mede**. O autor estima que é alto, mas isso é falta de medição, não sinal de que o problema é pequeno. Para medir, o próprio Veteran registra conversas e escalonamentos (ver Success).
-- Tempo que o suporte gasta testando antes de perguntar: não medido, e só dá para saber perguntando ao suporte no piloto.
-- O codebase-alvo tem ~21 GB e mais de 100 branches de patch por cliente, com commits até 2026-07. O comportamento pode variar por cliente. Isso cria uma ressalva obrigatória em toda resposta e significa que as buscas serão lentas (de dezenas de segundos a minutos).
-- A skill existente foi escrita por um único autor, em 8 commits: é um conteúdo estável que dá para reaproveitar como perfil.
+- Questions per week and developer minutes per question: **not measured by anyone**. The author's estimate is "a lot", but this is missing instrumentation, not evidence that the problem is small. Veteran itself will log conversations and escalations to measure it (see Success).
+- Time support spends testing before asking: not measured, and only asking support during the pilot will tell.
+- The target codebase is ~21 GB and has 100+ per-customer patch branches, with commits as recent as 2026-07. Behavior may differ per customer. That makes a caveat mandatory on every answer, and it means searches will be slow (tens of seconds to minutes).
+- The existing skill was written by a single author across 8 commits: stable content that can be reused as a profile.
 
 ## Journey
 
-Sequência confirmada: um analista de suporte faz uma pergunta em linguagem natural → espera → recebe a resposta → segue a conversa sozinho até resolver ou escalar para um dev.
+Confirmed sequence: a support analyst asks a question in natural language → waits → gets an answer → continues the conversation alone until it is resolved or escalated to a developer.
 
-- **Pergunta enviada:** confirma na hora ("analisando, costuma levar 1–2 min") e mostra progresso. Uma espera silenciosa de minutos faz parecer que travou.
-- **Comportamento que depende de tipo, configuração ou dado:** responde **por ramo** ("tipo A: não desativa; tipo B: desativa; checkout e perda: sempre desativam"). Cada ramo vira um **cenário de teste sugerido**, o que resolve a segunda dor.
-- **Pergunta ambígua demais para separar em ramos:** faz **uma** pergunta de esclarecimento em vez de escolher um caso.
-- **Contradição ("não é isso que vejo"):** o suporte responde na mesma conversa com o contexto novo, e o Veteran reanalisa com o histórico. Esse é o estado principal do produto.
-- **Observado diferente do código:** a resposta diz o que o código faz na versão atual e que a diferença pode ser um defeito ou um patch específico do cliente. Não afirma qual dos dois.
-- **Código não cobre (comportamento vem de configuração ou dado):** diz que "isso depende de configuração/dado", diz qual, e não inventa.
-- **Pedido de código, tabela, arquivo ou segredo:** recusa curta, e oferece a explicação funcional no lugar.
-- **Validação reprova duas vezes:** fallback fixo ("não consegui responder com segurança, leve a um dev") e um texto de escalonamento pronto para colar.
-- **Conversa retomada no dia seguinte:** a conversa fica disponível por 7 dias e depois começa do zero.
-- **Toda resposta** carrega a ressalva de versão: "comportamento da versão atual; clientes com patch próprio podem diferir".
+- **Question sent:** acknowledge immediately ("looking into it, usually 1–2 min") and show progress. A silent wait of several minutes reads as a hang.
+- **Behavior depends on type, configuration or data:** answer **by branch** ("type A: does not deactivate; type B: deactivates; checkout and loss: always deactivate"). Each branch becomes a **suggested test scenario**, which addresses the second pain.
+- **Question too ambiguous to split into branches:** ask **one** clarifying question instead of picking a case.
+- **Contradiction ("that's not what I see"):** support replies in the same conversation with the new context, and Veteran re-analyzes with the history. This is the core state of the product.
+- **Observed behavior differs from the code:** the answer states what the code does in the current version and that the difference may be a defect or a customer-specific patch. It does not claim which.
+- **Code does not cover it (behavior comes from configuration or data):** say "this depends on configuration/data", name which, and do not invent.
+- **Request for code, a table, a file or a secret:** short refusal, and offer the functional explanation instead.
+- **Validation fails twice:** fixed fallback ("I couldn't answer this safely, take it to a developer") plus escalation text ready to paste.
+- **Conversation resumed the next day:** the conversation stays available for 7 days, then starts over.
+- **Every answer** carries the version caveat: "behavior of the current version; customers with their own patch may differ".
 
 ## Verdict
 
-Já decidido, ver Situation.
+Already committed - see Situation.
 
-Caminhos mais baratos considerados:
-- Dar ao suporte o Claude Code com a skill existente num clone só de leitura. Tira o gargalo em um dia, mas dá ao suporte shell e o código inteiro, e a skill oferece detalhes técnicos. É exatamente o que o projeto existe para evitar. Descartado como produto.
-- FAQ curada escrita pelos devs. Não cobre a cauda longa, que é de onde vem o caso real. Fica como a Fase 7 do roadmap (base de conhecimento consultada primeiro), não como substituto.
-- Comprar: existem produtos de perguntas e respostas sobre código, mas voltados a devs, e eles mostram código. Não fiz um levantamento. Não conheço nenhum voltado a público não técnico com garantia de não mostrar código, e isso não foi verificado.
+Cheaper paths considered:
+- Give support Claude Code with the existing skill on a read-only clone. It removes the bottleneck in a day, but it hands support a shell and the whole codebase, and the skill offers technical details. That is exactly what this project exists to prevent. Discarded as the product.
+- A curated FAQ written by developers. It does not cover the long tail, which is where the real case came from. It stays as roadmap Phase 7 (a knowledge base consulted first), not as a substitute.
+- Buy: codebase Q&A products exist, but they target developers and show code. No survey was done. I know of none aimed at non-technical users with a no-code guarantee, and that was not verified.
 
 ## Success
 
-- Worked if: nas 4 primeiras semanas de piloto, ≥ 70% das conversas do suporte terminam sem escalonar para um dev.
-- Early signal: na primeira semana, o suporte confirma no ambiente de teste as respostas por ramo. Se mais de 1 em cada 5 respostas voltar com "não é isso que vejo", a aposta está indo mal.
-- Review: 4 semanas depois do início do piloto. Quem avalia: o autor.
-- Não medível hoje: não existe o número "antes". O proxy é a queda nas mensagens "me tira uma dúvida" recebidas pelos devs no chat. A instrumentação (registro de conversa, botão e contagem de escalonamento, polegar para cima e para baixo) faz parte deste trabalho.
-- Antes do piloto (gate de qualidade, não de sucesso): acurácia ≥ 80% no eval set real e 0 vazamentos de segredo no conjunto adversarial.
+- Worked if: over the first 4 weeks of the pilot, ≥ 70% of support conversations end without escalating to a developer.
+- Early signal: in the first week, support confirms the by-branch answers in the test environment. If more than 1 in 5 answers comes back with "that's not what I see", the bet is going wrong.
+- Review: 4 weeks after the pilot starts. Reviewed by: the author.
+- Not measurable today: there is no "before" number. The proxy is a drop in "quick question" messages developers get in chat. The instrumentation (conversation log, escalation button and count, thumbs up/down) is part of this work.
+- Before the pilot (a quality gate, not the success measure): ≥ 80% accuracy on the real eval set and 0 secret leaks on the adversarial set.
 
 ## Boundary
 
-In: eval set, PoC headless, perfil de projeto, snapshot filtrado do código, sandbox, validação de entrada e saída, conversa com várias trocas, e um canal mínimo para o suporte usar no piloto.
+In: eval set, headless PoC, project profile, filtered code snapshot, sandbox, input and output validation, multi-turn conversation, and a minimal channel for support to use in the pilot.
 Out:
-- Resposta por versão ou branch do cliente: responde contra o branch principal, com ressalva. Vira uma discovery própria depois do piloto.
-- Público externo (clientes): exigiria outro nível de validação e uma discovery própria.
-- Servidor MCP: vem depois que o serviço estiver estável (Fase 6 do roadmap).
-- Base de conhecimento curada: Fase 7, alimentada pelos logs do piloto.
-- Fila assíncrona, orçamento diário e SSO: o volume do piloto (poucos analistas) não justifica.
+- Answers per customer version or branch: answer against the main branch, with a caveat. It becomes its own discovery after the pilot.
+- External audience (customers): would need a different level of validation and its own discovery.
+- MCP server: comes after the service is stable (roadmap Phase 6).
+- Curated knowledge base: Phase 7, fed by the pilot logs.
+- Async queue, daily budget and SSO: pilot volume (a handful of analysts) does not justify them.
 
 ## Prior art
 
-- Roadmap de origem (Fases 0–7): tomamos a ordem (eval antes do produto, sandbox antes de expor) e o pipeline de validação em camadas com fail closed.
-- Falha relatada no próprio roadmap: uma instrução no prompt não é garantia. Aqui isso vira uma exclusão **física** de caminhos no snapshot, e não uma regra no prompt.
-- O roadmap assume uma empresa com SSO, fila e bot de chat corporativo. Não compartilhamos a escala nem o SSO, então o formato fica em um processo só.
-- Pesquisa na web de outros produtos: não verificado. Só a documentação do Agent SDK foi consultada.
+- The source roadmap (Phases 0–7): we take the ordering (evals before the product, sandbox before exposure) and the layered, fail-closed validation pipeline.
+- The failure the roadmap itself reports: a prompt instruction is not a guarantee. Here that becomes **physical** path exclusion in the snapshot, not a rule in the prompt.
+- The roadmap assumes a company with SSO, a queue and a corporate chat bot. We share neither the scale nor the SSO, so the shape stays a single process.
+- Web search for comparable products: not checked. Only the Agent SDK documentation was consulted.
 
 ## Shape
 
-A aposta: **um processo TypeScript só**, com a Agent SDK rodando um único agente de leitura sobre um **snapshot filtrado** do codebase. Todo o conhecimento específico do projeto fica num **perfil externo** ao repositório. A mesma função `ask` atende a CLI, o runner de evals e, depois, o chat do piloto. Mudar depois custa pouco no transporte (CLI → HTTP → bot) e caro no formato da resposta (o schema). Por isso o schema é decidido aqui.
+The bet: **a single TypeScript process**, where the Agent SDK runs one read-only agent over a **filtered snapshot** of the codebase. All project-specific knowledge lives in an **external profile** outside the repository. The same `ask` function serves the CLI, the eval runner and later the pilot chat. Changing the transport later (CLI → HTTP → bot) is cheap; changing the answer shape (the schema) is expensive. That is why the schema is decided here.
 
 ### Adds
 
-- `package.json`, `tsconfig.json`: projeto Node/TypeScript com a dependência `@anthropic-ai/claude-agent-sdk`.
-- `src/profile/loadProfile.ts`: lê `<VETERAN_PROFILE_DIR>/profile.yaml` (campos em Decisions).
-- `src/snapshot/buildSnapshot.ts`: comando `veteran snapshot`. Copia o `ref` do perfil para `<VETERAN_PROFILE_DIR>/snapshot/` aplicando `excludePaths`, roda o gitleaks e **aborta** se encontrar algo.
-- `src/agent/ask.ts`: `ask({ profile, question, sessionId? }) → VeteranAnswer` via `query()`, com as opções literais de Decisions.
-- `src/agent/answerSchema.ts`: JSON Schema de `VeteranAnswer`.
-- `src/validate/deterministic.ts`: bloqueia cercas de código, caminhos de arquivo, identificadores CamelCase/snake_case com ponto ou parênteses, palavras-chave SQL, formatos de stack trace, padrões de segredo e termos da `denyTerms` do perfil.
-- `src/validate/judge.ts`: uma chamada de juiz ("revela detalhe de implementação além do comportamento de negócio?").
-- `src/validate/pipeline.ts`: determinístico → juiz → se reprovar, regenera uma vez com feedback → se reprovar de novo, fallback. Nunca devolve uma resposta reprovada.
-- `src/transcripts/writeTranscript.ts`: um JSONL por execução em `<VETERAN_PROFILE_DIR>/transcripts/`, com as mensagens da SDK, `total_cost_usd`, `duration_ms` e o resultado de cada validação.
-- `src/evals/runEvals.ts` + `src/evals/rubricJudge.ts`: comando `veteran eval`. Roda `<VETERAN_PROFILE_DIR>/evals/*.jsonl` e informa acurácia, taxa de vazamento, custo e latência (p50/p95).
-- `src/cli.ts`: `veteran ask "<pergunta>" [--session <id>]`, `veteran eval`, `veteran snapshot`.
-- `Dockerfile` + `compose.yaml`: usuário não root, snapshot montado só para leitura em `/repo`, saída de rede liberada apenas para `api.anthropic.com`.
-- `profiles/example/`: um perfil de exemplo com um codebase público pequeno. O perfil real nunca entra no git.
-- `.gitignore`: ignora `profiles/*` exceto `profiles/example/`, além de `snapshot/` e `transcripts/`.
+- `package.json`, `tsconfig.json`: Node/TypeScript project depending on `@anthropic-ai/claude-agent-sdk`.
+- `src/profile/loadProfile.ts`: reads `<VETERAN_PROFILE_DIR>/profile.yaml` (fields in Decisions).
+- `src/snapshot/buildSnapshot.ts`: `veteran snapshot` command. Copies the profile's `ref` into `<VETERAN_PROFILE_DIR>/snapshot/` applying `excludePaths`, runs gitleaks and **aborts** on any finding.
+- `src/agent/ask.ts`: `ask({ profile, question, sessionId? }) → VeteranAnswer` via `query()`, with the literal options in Decisions.
+- `src/agent/answerSchema.ts`: JSON Schema for `VeteranAnswer`.
+- `src/validate/deterministic.ts`: blocks code fences, file paths, CamelCase/snake_case identifiers with dots or parentheses, SQL keywords, stack-trace shapes, secret patterns and the profile's `denyTerms`.
+- `src/validate/judge.ts`: one judge call ("does this reveal implementation details beyond business behavior?").
+- `src/validate/pipeline.ts`: deterministic → judge → on failure regenerate once with feedback → on second failure, fallback. Never returns a flagged answer.
+- `src/transcripts/writeTranscript.ts`: one JSONL per run in `<VETERAN_PROFILE_DIR>/transcripts/`, with the SDK messages, `total_cost_usd`, `duration_ms` and each validation result.
+- `src/evals/runEvals.ts` + `src/evals/rubricJudge.ts`: `veteran eval` command. Runs `<VETERAN_PROFILE_DIR>/evals/*.jsonl` and reports accuracy, leak rate, cost and latency (p50/p95).
+- `src/cli.ts`: `veteran ask "<question>" [--session <id>]`, `veteran eval`, `veteran snapshot`.
+- `Dockerfile` + `compose.yaml`: non-root user, snapshot mounted read-only at `/repo`, network egress allowed only to `api.anthropic.com`.
+- `profiles/example/`: an example profile over a small public codebase. The real profile never enters git.
+- `.gitignore`: ignores `profiles/*` except `profiles/example/`, plus `snapshot/` and `transcripts/`.
 
 ### Changes
 
-Nada. O repositório está vazio.
+Nothing. The repository is empty.
 
 ### Leaves
 
-- Resolução por cliente ou versão, MCP, fila assíncrona, SSO e base curada: listados em Boundary Out.
-- A skill existente no codebase-alvo continua como está, para os devs. O Veteran só copia o conteúdo dela para o perfil.
+- Per-customer or per-version resolution, MCP, async queue, SSO and the curated knowledge base: listed in Boundary Out.
+- The existing skill in the target codebase stays as is, for developers. Veteran only copies its content into the profile.
 
-Cada estado do Journey tem onde ser tratado: resposta por ramo, cenários de teste e pergunta de esclarecimento → campos `branches`, `suggestedTests` e `clarifyingQuestion` do schema. Contradição e retomada → `sessionId`/`resume`. Pedido de código e fallback → `pipeline.ts`. "Depende de configuração" → `dependsOn`. Ressalva de versão → `versionCaveat`, preenchido pelo perfil e não pelo modelo. Confirmação imediata e progresso → canal (Needs design).
+Every Journey state has a home: by-branch answers, test scenarios and the clarifying question → the `branches`, `suggestedTests` and `clarifyingQuestion` fields of the schema. Contradiction and next-day resume → `sessionId`/`resume`. Code requests and fallback → `pipeline.ts`. "Depends on configuration" → `dependsOn`. Version caveat → `versionCaveat`, filled from the profile, not by the model. Immediate acknowledgement and progress → the channel (Needs design).
 
-A alternativa mais pesada é o roadmap completo: serviço HTTP assíncrono com fila e worker separado, bot no chat corporativo, SSO e um worktree por versão de cliente. Ela ganha quando houver dezenas de usuários simultâneos ou quando a resposta por cliente for obrigatória. Hoje o piloto tem poucos analistas e a versão por cliente está fora do escopo. O formato leve não aguenta respostas por cliente nem concorrência alta. O que forçaria reescrever seria abrir para muitos times ao mesmo tempo, e mesmo assim `ask` e `pipeline` sobrevivem: só o transporte muda.
+The heavier alternative is the full roadmap: an async HTTP service with a queue and a separate worker, a corporate chat bot, SSO and a worktree per customer version. It wins when there are dozens of concurrent users or when per-customer answers become mandatory. Today the pilot is a handful of analysts and per-customer versions are out of scope. The light shape will not survive per-customer answers or high concurrency. What would force a rewrite is opening it to many teams at once, and even then `ask` and `pipeline` survive: only the transport changes.
 
-Também existem no mercado, só como referência e não como candidatos: RAG com embeddings do código, descartado porque "depende do tipo" exige seguir o fluxo, não achar trechos parecidos. E orquestração com vários agentes, descartada porque o roadmap manda só dividir quando um eval mostrar uma falha que a divisão corrige.
+Also in the field, for perspective and not as candidates: RAG over code embeddings, removed because "it depends on the type" requires following the flow, not finding similar snippets. Multi-agent orchestration, removed because the roadmap says to split only when an eval shows a failure that splitting fixes.
 
 ## Roadmap
 
 | Block | Delivers | Clarity |
 |---|---|---|
-| 1. Perfil + snapshot filtrado | `veteran snapshot` gera um snapshot sem caminhos excluídos e sem segredos detectados; o perfil de exemplo funciona | clear |
-| 2. Eval set | ≥ 40 perguntas reais (do histórico de chat, com a resposta que o dev deu) + ≥ 20 adversariais, e rubrica, no perfil real | clear |
-| 3. PoC headless | `veteran ask` responde no schema e grava o transcript; `veteran eval` informa acurácia, custo e latência | clear |
-| 4. Validação de saída | `pipeline.ts` com fail closed; taxa de vazamento como métrica separada no `veteran eval` | clear |
-| 5. Sandbox | `compose.yaml` roda `ask` como usuário não root, com leitura apenas e saída de rede só para a API | clear |
-| 6. Conversa com várias trocas | follow-ups com `resume` mantêm a qualidade no caso da contradição | spike |
-| 7. Onde o piloto roda | decisão autorizada sobre a máquina/infra que hospeda o código do empregador | rfc |
-| 8. Canal do suporte | o suporte conversa sem dev no meio: confirmação, progresso, ramos, escalonamento | design |
+| 1. Profile + filtered snapshot | `veteran snapshot` produces a snapshot with no excluded paths and no detected secrets; the example profile works | clear |
+| 2. Eval set | ≥ 40 real questions (from chat history, with the answer a developer gave) + ≥ 20 adversarial ones, and a rubric, in the real profile | clear |
+| 3. Headless PoC | `veteran ask` answers in the schema and writes the transcript; `veteran eval` reports accuracy, cost and latency | clear |
+| 4. Output validation | `pipeline.ts` failing closed; leak rate as a separate metric in `veteran eval` | clear |
+| 5. Sandbox | `compose.yaml` runs `ask` as a non-root user, read-only, with egress only to the API | clear |
+| 6. Multi-turn conversation | follow-ups with `resume` keep quality in the contradiction case | spike |
+| 7. Where the pilot runs | an authorized decision on the machine/infrastructure that hosts the employer's code | rfc |
+| 8. Support channel | support converses with no developer in the middle: acknowledgement, progress, branches, escalation | design |
 
 ## Decisions
 
 | Decision | Choice | Why this | Alternative, and what would make it win | Reversibility |
 |---|---|---|---|---|
-| Linguagem e runtime | TypeScript em Node, `@anthropic-ai/claude-agent-sdk` | A mesma linguagem para agente, validação e o chat web do piloto | Python SDK, se o autor preferir; não há código ainda | costly |
-| Ferramentas do agente | `tools: ["Read", "Grep", "Glob"]`, `disallowedTools: ["Bash", "Write", "Edit", "WebFetch", "WebSearch"]` | O que o agente não alcança não vaza; `allowedTools` sozinho não restringe | Nenhuma: shell "só para grep" é o anti-padrão do roadmap | reversible |
-| Isolamento de configuração | `settingSources: []`, `cwd: "/repo"` | O codebase-alvo tem arquivos de instrução para agentes; carregá-los seria injeção vinda do próprio repositório | Nenhuma | reversible |
-| Limites por execução | `maxTurns: 40`, `maxBudgetUsd: 1.00`, timeout de 5 min no chamador | Um repositório grande faz o agente vagar; os valores serão recalibrados pelo p95 do eval | Mais altos, se o eval mostrar respostas truncadas | reversible |
-| Formato da resposta | `outputFormat: { type: "json_schema", schema }` com `VeteranAnswer = { answer: string, branches: {condition: string, behavior: string}[], suggestedTests: string[], clarifyingQuestion: string \| null, confidence: "high" \| "medium" \| "low", dependsOn: string[], caveats: string[], internalReferences: string[] }`; `versionCaveat` é anexado pelo serviço | Resposta por ramo e cenários de teste saem do schema, não do texto livre; `internalReferences` nunca sai para o suporte | Texto livre, se o schema degradar a qualidade no eval | costly |
-| Conversa | `resume: <sessionId>` da SDK; sessão válida por 7 dias | A contradição é o estado central; a sessão guarda o que já foi lido | Reenviar o histórico resumido em cada pergunta, se o spike 6 mostrar custo ou qualidade ruins | reversible |
-| Exclusão de caminhos | Física: `excludePaths` aplicado na cópia do snapshot + gitleaks aborta o snapshot | "Se o agente não consegue ler, nenhuma injeção extrai" | Deny por ferramenta: rejeitada, porque depende da SDK obedecer | costly |
-| Perfil | `profile.yaml`: `name`, `repoPath`, `ref`, `language: "pt-BR"`, `instructions: [arquivos .md]`, `excludePaths: [glob]`, `denyTerms: [string]`, `versionCaveat: string`; diretório via `VETERAN_PROFILE_DIR` | Agnóstico por fronteira, sem generalizar antes do 2º codebase; o perfil real fica fora do repo pessoal | Um perfil por codebase dentro do repo: só para codebases públicos | costly |
-| Modelos | Agente `claude-opus-5-5`; juízes (validação e rubrica) `claude-sonnet-5-5` | Ler o código com precisão é o gargalo; o juiz faz uma classificação barata | Juiz no Opus, se a concordância com o dev ficar abaixo de 80% | reversible |
-| Fail closed | 1 regeneração com feedback; se reprovar de novo, fallback fixo + texto de escalonamento | Nunca entregar uma resposta reprovada | Nenhuma | reversible |
-| Versão do código | `ref` do perfil = branch principal; `versionCaveat` em toda resposta | Resolver cliente → branch dobra a infraestrutura antes de provar a acurácia | Resolução por cliente, quando o piloto mostrar erros causados por patch | reversible |
-| Acompanhamento do trabalho | Uma issue no GitHub por bloco do Roadmap, com link para a seção deste doc, sem nomes nem dados do codebase-alvo | O repositório é pessoal e público | — | reversible |
+| Language and runtime | TypeScript on Node, `@anthropic-ai/claude-agent-sdk` | One language for agent, validation and the pilot web chat | Python SDK, if the author prefers it; there is no code yet | costly |
+| Agent tools | `tools: ["Read", "Grep", "Glob"]`, `disallowedTools: ["Bash", "Write", "Edit", "WebFetch", "WebSearch"]` | What the agent cannot reach cannot leak; `allowedTools` alone does not restrict | None: a shell "just for grep" is the roadmap's anti-pattern | reversible |
+| Configuration isolation | `settingSources: []`, `cwd: "/repo"` | The target codebase ships agent instruction files; loading them would be injection from the repository itself | None | reversible |
+| Per-run limits | `maxTurns: 40`, `maxBudgetUsd: 1.00`, 5 min timeout in the caller | A large repository makes the agent wander; values are recalibrated from the eval p95 | Higher, if the eval shows truncated answers | reversible |
+| Answer shape | `outputFormat: { type: "json_schema", schema }` with `VeteranAnswer = { answer: string, branches: {condition: string, behavior: string}[], suggestedTests: string[], clarifyingQuestion: string \| null, confidence: "high" \| "medium" \| "low", dependsOn: string[], caveats: string[], internalReferences: string[] }`; `versionCaveat` appended by the service | By-branch answers and test scenarios come from the schema, not free text; `internalReferences` never reaches support | Free text, if the schema degrades quality in the eval | costly |
+| Conversation | SDK `resume: <sessionId>`; session valid for 7 days | Contradiction is the core state; the session keeps what was already read | Re-send a summarized history with each question, if spike 6 shows poor cost or quality | reversible |
+| Path exclusion | Physical: `excludePaths` applied when copying the snapshot + gitleaks aborts the snapshot | "If the agent can't read it, no injection can extract it" | Per-tool deny: rejected, because it depends on the SDK obeying | costly |
+| Profile | `profile.yaml`: `name`, `repoPath`, `ref`, `language: "pt-BR"`, `instructions: [.md files]`, `excludePaths: [glob]`, `denyTerms: [string]`, `versionCaveat: string`; directory via `VETERAN_PROFILE_DIR` | Agnostic by boundary, without generalizing before a 2nd codebase; the real profile stays out of the personal repo | One profile per codebase inside the repo: only for public codebases | costly |
+| Models | Agent `claude-opus-5-5`; judges (validation and rubric) `claude-sonnet-5-5` | Reading code precisely is the bottleneck; the judge does a cheap classification | Opus judge, if agreement with developers stays below 80% | reversible |
+| Fail closed | 1 regeneration with feedback; on second failure, fixed fallback + escalation text | Never deliver a flagged answer | None | reversible |
+| Code version | Profile `ref` = main branch; `versionCaveat` on every answer | Resolving customer → branch doubles the infrastructure before accuracy is proven | Per-customer resolution, once the pilot shows errors caused by patches | reversible |
+| Work tracking | One GitHub issue per Roadmap block, linking to this doc's section, with no names or data from the target codebase | The repository is personal and public | — | reversible |
+| Artifact language | English for docs, code, commits and issues; answers to end users follow the profile's `language` | Public repository | — | reversible |
 
 ## Needs an RFC
 
-1. Onde o piloto roda e quem autoriza. O snapshot contém código do empregador, e rodar numa infraestrutura pessoal não é aceitável sem autorização. As opções são a estação do dev, uma VM da empresa ou a nuvem da empresa. Isso bloqueia os blocos 5 (na forma final) e 8, e a decisão fica com quem responde pelo código, não com o autor.
+1. Where the pilot runs and who authorizes it. The snapshot contains the employer's code, and running it on personal infrastructure is not acceptable without authorization. The options are the developer's workstation, a company VM or the company cloud. This blocks blocks 5 (in its final form) and 8, and the decision belongs to whoever owns the code, not to the author.
 
 ## Needs a spike
 
-1. Conversa com várias trocas usando `resume`: um follow-up com contradição ("não é isso que vejo, é o tipo B") produz a resposta correta com custo ≤ 50% da primeira pergunta? Se sim, fica o `resume`. Se não, passa a enviar um resumo da conversa com uma nova execução. O spike para depois de rodar 10 casos de contradição do eval set.
+1. Multi-turn conversation via `resume`: does a contradiction follow-up ("that's not what I see, it's type B") produce the correct answer at ≤ 50% of the cost of the first question? If yes, `resume` stays. If not, send a conversation summary with a fresh run. The spike stops after running 10 contradiction cases from the eval set.
 
 ## Needs design
 
-1. Canal do suporte (chat web mínimo vs. bot no chat corporativo). O design precisa responder a estes estados do Journey: confirmação imediata e progresso durante minutos de espera, exibição dos ramos e dos cenários de teste, a pergunta de esclarecimento, o fallback com botão de escalonamento, e a conversa retomada no dia seguinte. Depende do RFC 1, porque o local de hospedagem limita quais canais são possíveis.
+1. Support channel (minimal web chat vs. corporate chat bot). The design has to answer these Journey states: immediate acknowledgement and progress during multi-minute waits, display of branches and test scenarios, the clarifying question, the fallback with an escalation button, and the conversation resumed the next day. It depends on RFC 1, because where it is hosted limits which channels are possible.
 
 ## Open
 
-1. Formato do eval set: JSONL com `{ id, question, referenceAnswer, expectedBranches?, tags, adversarial: boolean }`. Decide-se ao construir o bloco 2.
-2. Idioma da UI e das respostas: `pt-BR`, vindo do perfil.
-3. Retenção de transcripts: 90 dias no diretório do perfil.
+1. Eval set format: JSONL with `{ id, question, referenceAnswer, expectedBranches?, tags, adversarial: boolean }`. Decided while building block 2.
+2. End-user answer language: `pt-BR`, from the profile.
+3. Transcript retention: 90 days in the profile directory.
 
 ## Sources
 
-- Roadmap de 7 fases fornecido pelo autor (conversa de 2026-09-30): ordem das fases, pipeline de validação, recomendações de sandbox.
-- Documentação da Agent SDK TypeScript, `code.claude.com/docs/en/agent-sdk/typescript`: `tools`, `disallowedTools`, `allowedTools` ("does not restrict Claude to only these tools"), `maxTurns`, `resume`, `outputFormat`/`structured_output`, `settingSources`, `maxBudgetUsd`, `total_cost_usd`, `duration_ms`.
-- Skill de explicação funcional existente no codebase-alvo, lida localmente e não citada aqui: fluxo de análise, regras de estilo e os 13 evals de formato.
-- Conversa real entre suporte e dev (captura de tela fornecida pelo autor): o caso da resposta sem ramos.
+- The 7-phase roadmap provided by the author (conversation of 2026-09-30): phase ordering, validation pipeline, sandbox recommendations.
+- Agent SDK TypeScript documentation, `code.claude.com/docs/en/agent-sdk/typescript`: `tools`, `disallowedTools`, `allowedTools` ("does not restrict Claude to only these tools"), `maxTurns`, `resume`, `outputFormat`/`structured_output`, `settingSources`, `maxBudgetUsd`, `total_cost_usd`, `duration_ms`.
+- The existing functional-explanation skill in the target codebase, read locally and not quoted here: analysis flow, style rules and the 13 format evals.
+- A real support ↔ developer conversation (screenshot provided by the author): the unbranched-answer case.
