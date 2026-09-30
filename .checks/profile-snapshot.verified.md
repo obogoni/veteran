@@ -1,94 +1,117 @@
 # Project profile + filtered snapshot Verification
 
-**Verdict**: PASS (29/29 checks proven, Gate green), with findings below that should be closed
+**Verdict**: PASS (29/29 checks proven, Gate green). G1-G11 closed, G12 accepted, one partial (G5) and two new low findings below
 **Profile**: light (the project declares none)
-**Diff range**: cde1cc4..78c1dd1
-**Round**: 1 - full
+**Diff range**: cde1cc4..2d36bb1 (fix: 78c1dd1..2d36bb1)
+**Round**: 2 - scoped
 **Verifier**: independent sub-agent (author != verifier)
 
-Environment: Node v24.9.0, gitleaks 8.30.1 (verified binary, prepended to PATH; C24 strips PATH itself via `pathWithoutGitleaks()`), Windows 11, Git Bash. Real tree `git status --porcelain` empty before and after the runs.
+Environment: Node v24.9.0, gitleaks 8.30.1 from the winget Links directory prepended to PATH (C24 and the CLI half of C25 build their own PATH through `pathWithoutGitleaks()`), Windows 11, Git Bash. The real tree's `git status --porcelain` was empty before and after every run. Scratch reproductions ran in the session scratchpad, outside the repo.
 
-## Binding sources
+Scope: the proofs re-ran in full at 2d36bb1. Citations were refreshed for the files the fix touched (`test/snapshot.test.ts`, `test/scan.test.ts`, `test/example.test.ts`, `.checks/profile-snapshot.md`). `test/profile.test.ts` and `test/glob.test.ts` are untouched (`git diff --stat 78c1dd1..HEAD`), so their rows are carried. The fix touched no `src/` file.
+
+## Binding sources - carried from 78c1dd1
 
 Did not run: step 1 runs only under `ui`, and the checklist marks no source as binding.
 
-## Proof run
+## Proof run - verified at 2d36bb1
 
-One invocation, filter before the files so it applies:
+One invocation, with the filter placed before the files:
 
 ```
+PATH="/c/Users/OtávioBogoni/AppData/Local/Microsoft/WinGet/Links:$PATH" \
 node --test --test-reporter=spec --test-name-pattern="^C([1-9]|1[0-9]|2[0-9]) " \
   test/profile.test.ts test/glob.test.ts test/snapshot.test.ts test/scan.test.ts test/example.test.ts
 ```
 
-Result: `tests 29 / pass 29 / fail 0`, exit 0. Each of C1-C29 appears in the output by name as passed. The two unnamed tests (`globs: * stays within a segment...`, `excludePaths entries that could silently match nothing...`) were filtered out, which confirms the filter works. (A first run with the flag placed *after* the files ignored the filter and ran 31 tests. Worth knowing when copying the proof commands.)
+Result: `tests 30 / pass 30 / fail 0`, exit 0, 52 s (C28 clones from GitHub, 12.7 s). Every one of C1-C29 appears by name as passed. C25 appears twice, and both passed:
+- `C25 a gitleaks that exits with an error makes veteran snapshot exit non-zero, snapshot unchanged`
+- `C25 a scanner that errors, or exits 0 without the canary, aborts and leaves the snapshot unchanged`
 
-All six test files are added by this diff (`git diff --diff-filter=A --name-only cde1cc4..HEAD -- test`). Every proof resolves to a test this feature added.
+The two unnamed tests were filtered out, so the filter was applied (30 = 29 checks + the second C25).
 
 ## Checks
 
 | Check | Claim | Proof run | Evidence | Result |
 |---|---|---|---|---|
-| C1 | unset/empty env var: non-zero, names var, cwd gains nothing | `^C1 ` passed | `test/profile.test.ts:13-15`: `assert.notEqual(result.status, 0)`; `assert.match(result.stderr, /VETERAN_PROFILE_DIR/)`; `assert.deepEqual(readdirSync(cwd), [])`, looped over `[undefined, ""]` (:10) | PASS |
-| C2 | missing profile.yaml: non-zero, absolute path | `^C2 ` passed | `test/profile.test.ts:22-23`: `notEqual(status, 0)`; `result.stderr.includes(join(dir, "profile.yaml"))` | PASS |
-| C3 | invalid YAML: non-zero, absolute path | `^C3 ` passed | `test/profile.test.ts:30-32`: same path assertion plus `/Invalid YAML/` | PASS |
-| C4 | all 8 fields named in one run, no git (git absent from PATH) | `^C4 ` passed | `test/profile.test.ts:38` `runCli(dir, { env: { PATH: "", Path: "" } })`; `:40` `for (const field of FIELDS) assert.match(result.stderr, new RegExp(\`- ${field}: missing\`))` over the literal 8-name list at `:7`; `:41` `assert.doesNotMatch(result.stderr, /git/i)` | PASS |
-| C5 | three wrong-type shapes are named | `^C5 ` passed | `test/profile.test.ts:49-51`: `/- name: expected a non-empty string/` (list given), `/- excludePaths: expected a list of strings/` (string given), `/- denyTerms: expected a list of strings/` (`["ok", 3]`) | PASS |
-| C6 | relative repoPath resolves against profile dir | `^C6 ` passed | `test/snapshot.test.ts:24` `makeProfile("./repo")`, `:29` cwd elsewhere; `:30` `assert.equal(result.status, 0)`; `:31` `filesOf(...snapshot) == ["a.txt"]` | PASS |
-| C7 | relative instructions resolve; missing entry named | `^C7 ` passed | `test/profile.test.ts:57` cwd elsewhere; `:59` `/instructions\[1\] "missing\.md": file not found/`; `:60` `doesNotMatch(/instructions\[0\]/)` | PASS |
-| C8 | non-repo (incl. plain dir inside a repo): non-zero, path named, snapshot unchanged | `^C8 ` passed | `test/snapshot.test.ts:38` loops `[tempDir, inner]`; `:42` `stderr.includes(\`repoPath is not a git repository: ${repoPath}\`)`; `:43` `exists(snapshot) === false` | PASS (see G4) |
-| C9 | bad ref: non-zero, ref named, snapshot unchanged | `^C9 ` passed | `test/snapshot.test.ts:55` `/ref does not resolve to a commit .*: no-such-branch/`; `:56` `deepEqual(readTree(snapshot), before)` with a prior snapshot (`:50`) | PASS |
-| C11 | exact tracked set, byte-identical, CRLF/binary, no untracked/uncommitted | `^C11 ` passed | `test/snapshot.test.ts:75` `filesOf == ["README.md","run.sh","src/crlf.txt","src/data.bin"]` (excludes `untracked.txt`); `:77` `README.md == "hello\n"` (uncommitted edit absent); `:78` CRLF buffer; `:79` `BINARY` (literal at `:21`) | PASS |
-| C12 | glob dialect: 4 task examples plus literal `?` | `^C12 ` passed | `test/glob.test.ts:7-15` table of literal `[pattern, path, excluded]`; `:18` `assert.equal(compileExcludes([pattern])(path), excluded)` | PASS |
-| C13 | the snapshot applies the dialect | `^C13 ` passed | `test/snapshot.test.ts:96` `filesOf == ["Docs/a.txt","ab.txt","certs/key.pem","keep/main.ts"]` | PASS (see G6) |
-| C14 | no `.git` at any depth; gitlink not written | `^C14 ` passed | `test/snapshot.test.ts:106` `keys.every(key => !key.split("/").includes(".git"))`; `:107` `exists(snapshot/vendor/sub) === false` | PASS (see G8) |
-| C15 | inside + outside symlinks absent, `2 symlinks omitted` | `^C15 ` passed | `test/snapshot.test.ts:119` `[...tree.keys()].sort() == ["real.txt"]`; `:120` `/2 symlinks omitted/` | PASS |
-| C16 | second run replaces wholesale (deleted + newly excluded absent) | `^C16 ` passed | `test/snapshot.test.ts:127` first set of three; `:134` `filesOf == ["keep.txt"]` | PASS |
-| C17 | HEAD, branch, porcelain identical after success and failure | `^C17 ` passed | `test/snapshot.test.ts:146` and `:150` `deepEqual(repoState(repo), before)`; `repoState` = `rev-parse HEAD`, `symbolic-ref --short HEAD`, `status --porcelain --untracked-files=all` (`helpers.ts:148-150`, claim names these) | PASS (see G7) |
-| C18 | non-zero; repo-relative path + `github-pat`; value in neither stream | `^C18 ` passed | `test/scan.test.ts:28` `notEqual(status, 0)`; `:29` `/src\/settings\.ts:1 \(rule github-pat\)/`; `:30` `!stderr.includes(secret) && !stdout.includes(secret)` | PASS (see G1) |
-| C19 | after abort snapshot byte-identical; absent when none | `^C19 ` passed | `test/scan.test.ts:37` `exists(fresh/snapshot) === false`; `:41` `deepEqual(readTree(snapshot), before)` | PASS |
-| C20 | secret only in excluded path exits 0 | `^C20 ` passed | `test/scan.test.ts:47` `assert.equal(result.status, 0)` | PASS |
-| C21 | tree `.gitleaks.toml` allowlist does not stop abort | `^C21 ` passed | `test/scan.test.ts:52` allowlist `paths ['.*']`, `regexes ['ghp_.*']`; `:55-56` non-zero + `/src\/settings\.ts:1 \(rule github-pat\)/` | PASS |
-| C22 | root `.gitleaksignore` with every plausible fingerprint does not stop abort | `^C22 ` passed | `test/scan.test.ts:60-61` fingerprints `src/…`, `tree/src/…`, `scan/tree/src/…` `:github-pat:1`; `:65-66` non-zero + finding | PASS (see G5) |
-| C23 | `gitleaks:allow` comment does not stop abort | `^C23 ` passed | `test/scan.test.ts:71` `// gitleaks:allow` on the secret line; `:73-74` non-zero + finding | PASS |
-| C24 | gitleaks absent: non-zero, "scan did not complete", snapshot unchanged | `^C24 ` passed | `test/scan.test.ts:81` PATH = git's dir only; `:83` `/secret scan did not complete \(gitleaks not found on PATH\)/`; `:84` `deepEqual(readTree(snapshot), before)` | PASS |
-| C25 | scanner error or silent exit 0 aborts with "scan did not complete", snapshot unchanged | `^C25 ` passed | `test/scan.test.ts:91` scripts `exit(1)`, `exit(0)`, `exit(42)` with no report; `:95-97` `assert.rejects(buildSnapshot(...), /secret scan did not complete/)`; `:100` `deepEqual(readTree(snapshot), before)` | PASS (see G2) |
-| C26 | failure at copy / scan / replace: no `.snapshot-*`, snapshot unchanged | `^C26 ` passed | `test/snapshot.test.ts:161-170` three injected failures; `:172` `rejects(..., new RegExp(\`${step} failed\`))`; `:173` `readdirSync(dir).filter(startsWith(".snapshot-")) == []`; `:174` `deepEqual(readTree(snapshot), before)` | PASS (see G3) |
-| C27 | one stdout line: 40-hex SHA + counts matching fixture | `^C27 ` passed | `test/snapshot.test.ts:184` `assert.equal(result.stdout, \`snapshot ${sha}: 2 files copied, 1 excluded, 1 symlinks omitted, 0 submodules omitted\n\`)` | PASS |
-| C28 | clone per README, exit 0, `.specs/` at pinned ref, absent from snapshot | `^C28 ` passed (network clone, ~13 s) | `test/example.test.ts:14` README has clone command; `:21` `excludePaths.includes(".specs")`; `:22` `ls-tree ref .specs` non-empty; `:25` `status === 0`; `:27` `exists(snapshot/.specs) === false` | PASS (see G9, G10) |
-| C29 | check-ignore on the six paths | `^C29 ` passed | `test/example.test.ts:39-47` ignored: `profiles/acme/profile.yaml`, `…/snapshot/a.txt`, `…/transcripts/a.jsonl`, `…/repo/README.md`, `.snapshot-staging-abc/…`; `:48-49` not ignored: `profiles/example/profile.yaml`, `profiles/example/README.md` | PASS (see G11) |
+| C1 | unset/empty env var: non-zero, names var, cwd gains nothing | `^C1 ` passed | carried from 78c1dd1: `test/profile.test.ts:13-15`: `assert.notEqual(result.status, 0)`; `assert.match(result.stderr, /VETERAN_PROFILE_DIR/)`; `assert.deepEqual(readdirSync(cwd), [])`, looped over `[undefined, ""]` (:10) | PASS |
+| C2 | missing profile.yaml: non-zero, absolute path | `^C2 ` passed | carried from 78c1dd1: `test/profile.test.ts:22-23`: `result.stderr.includes(join(dir, "profile.yaml"))` | PASS |
+| C3 | invalid YAML: non-zero, absolute path | `^C3 ` passed | carried from 78c1dd1: `test/profile.test.ts:30-32` | PASS |
+| C4 | all 8 fields named in one run, git absent | `^C4 ` passed | carried from 78c1dd1: `test/profile.test.ts:38` `PATH: ""`; `:40` `new RegExp(\`- ${field}: missing\`)` over the 8 literals at `:7`; `:41` `doesNotMatch(/git/i)` | PASS |
+| C5 | three wrong-type shapes named | `^C5 ` passed | carried from 78c1dd1: `test/profile.test.ts:49-51` | PASS |
+| C6 | relative repoPath resolves against profile dir | `^C6 ` passed | verified at 2d36bb1: `test/snapshot.test.ts:26` `makeProfile("./repo")`, `:31` cwd `tempDir("cwd")`; `:32` `assert.equal(result.status, 0)`; `:33` `filesOf(...) == ["a.txt"]` | PASS |
+| C7 | relative instructions resolve; missing entry named | `^C7 ` passed | carried from 78c1dd1: `test/profile.test.ts:57-60` | PASS |
+| C8 | non-repo (incl. plain dir in a repo): non-zero, path named, snapshot unchanged | `^C8 ` passed | verified at 2d36bb1: `test/snapshot.test.ts:40` loop over `[tempDir, inner]`; `:44` `stderr.includes(\`repoPath is not a git repository: ${repoPath}\`)`; new prior-snapshot case `:48` `runCli(dir).status === 0`, `:50` repoPath swapped to `inner`, `:51` `notEqual(status, 0)`, `:52` `deepEqual(readTree(snapshot), before)` | PASS |
+| C9 | bad ref: non-zero, ref named, snapshot unchanged | `^C9 ` passed | verified at 2d36bb1: `test/snapshot.test.ts:63` `/ref does not resolve to a commit .*: no-such-branch/`; `:64` `deepEqual(readTree(snapshot), before)` | PASS |
+| C10 | `!` entry rejected by name | `^C10 ` passed | carried from 78c1dd1 (`test/profile.test.ts`, untouched) | PASS |
+| C11 | exact tracked set, byte-identical, CRLF/binary, no untracked/uncommitted | `^C11 ` passed | verified at 2d36bb1: `test/snapshot.test.ts:83` `filesOf == ["README.md","run.sh","src/crlf.txt","src/data.bin"]`; `:85` `Buffer.from("hello\n")`; `:86` CRLF; `:87` `BINARY` (literal `:23`) | PASS |
+| C12 | glob dialect: 4 task examples + literal `?` | `^C12 ` passed | carried from 78c1dd1: `test/glob.test.ts:6-16` literal table; `:18` `assert.equal(compileExcludes([pattern])(path), excluded)` | PASS |
+| C13 | snapshot applies one pattern of each named shape | `^C13 ` passed | verified at 2d36bb1: `test/snapshot.test.ts:101` `excludePaths: ["config", "*.pem", "deep/**/*.pem", "a?.txt", "docs/**"]`, exactly the five shapes the reworded C13 names; `:104` `filesOf == ["Docs/a.txt","ab.txt","certs/key.pem","keep/main.ts"]` | PASS |
+| C14 | no `.git` at any depth; gitlink not written | `^C14 ` passed | verified at 2d36bb1: `test/snapshot.test.ts:110` `commitCraftedGitDirs(repo)` (`:213-228`); `:115` `keys.every(key => !key.split("/").includes(".git"))`; `:116` `exists(snapshot/vendor/sub) === false`; `:117` `/1 submodules omitted/` | PASS |
+| C15 | inside + outside symlinks absent, `2 symlinks omitted` | `^C15 ` passed | verified at 2d36bb1: `test/snapshot.test.ts:128` `[...tree.keys()].sort() == ["real.txt"]`; `:129` `/2 symlinks omitted/` | PASS |
+| C16 | second run replaces wholesale | `^C16 ` passed | verified at 2d36bb1: `test/snapshot.test.ts:136` first set of three; `:143` `filesOf == ["keep.txt"]` | PASS |
+| C17 | HEAD, branch, porcelain identical after success and failure | `^C17 ` passed | verified at 2d36bb1: `test/snapshot.test.ts:155`, `:159` `deepEqual(repoState(repo), before)`; new post-copy failure `:167` `notEqual(status, 0)`, `:168` `/gitleaks found/`, `:169` `deepEqual(repoState(repo), beforeLeak)`; `repoState` = `rev-parse HEAD`, `symbolic-ref --short HEAD`, `status --porcelain --untracked-files=all` (`test/helpers.ts:146-151`) | PASS (see N1) |
+| C18 | non-zero; repo-relative path + `github-pat`; value in neither stream | `^C18 ` passed | verified at 2d36bb1: `test/scan.test.ts:31` `notEqual(status, 0)`; `:32` `assert.match(result.stderr, FINDING_LINE)` with `FINDING_LINE = /^  - src\/settings\.ts:1 \(rule github-pat\)$/m` (`:10`); `:33` `!stderr.includes(secret) && !stdout.includes(secret)` | PASS |
+| C19 | after abort snapshot byte-identical; absent when none | `^C19 ` passed | verified at 2d36bb1: `test/scan.test.ts:40` `exists(fresh/snapshot) === false`; `:44` `deepEqual(readTree(snapshot), before)` | PASS |
+| C20 | secret only in excluded path exits 0 | `^C20 ` passed | verified at 2d36bb1: `test/scan.test.ts:50` `assert.equal(result.status, 0)` | PASS |
+| C21 | tree `.gitleaks.toml` cannot allowlist | `^C21 ` passed | verified at 2d36bb1: `test/scan.test.ts:55` allowlist `paths ['.*']`, `regexes ['ghp_.*']`; `:58` non-zero; `:59` `FINDING_LINE` | PASS |
+| C22 | root `.gitleaksignore` with `src/…`, `tree/src/…`, `scan/tree/src/…` cannot ignore | `^C22 ` passed | verified at 2d36bb1: `test/scan.test.ts:63-64` exactly those three paths `+ ":github-pat:1"`; `:68` non-zero; `:69` `FINDING_LINE` | PASS |
+| C23 | `gitleaks:allow` cannot silence | `^C23 ` passed | verified at 2d36bb1: `test/scan.test.ts:74` `// gitleaks:allow`; `:76` non-zero; `:77` `FINDING_LINE` | PASS |
+| C24 | gitleaks absent: non-zero, "scan did not complete", snapshot unchanged | `^C24 ` passed | verified at 2d36bb1: `test/scan.test.ts:83-84` PATH = git's dir only; `:85` non-zero; `:86` `/secret scan did not complete \(gitleaks not found on PATH\)/`; `:87` `deepEqual(readTree(snapshot), before)` | PASS |
+| C25 | error -> CLI non-zero; exit 0/42 without canary -> `buildSnapshot` rejects; both "scan did not complete", snapshot unchanged | both `^C25 ` tests passed | verified at 2d36bb1: CLI half `test/scan.test.ts:95` node binary copied as `gitleaks(.exe)`, `:96-97` PATH puts it first; `:98` `notEqual(result.status, 0)`; `:99` `/secret scan did not complete \(gitleaks exited 1/`; `:100` `deepEqual(readTree(snapshot), before)`. In-process half `:107` `process.exit(1)`, `process.exit(0)`, `process.exit(42)`; `:111-115` `assert.rejects(buildSnapshot(...), /secret scan did not complete/)`; `:116` `deepEqual(..., before)` | PASS |
+| C26 | failure at copy / scan / replace: no `.snapshot-*`, snapshot unchanged | `^C26 ` passed | verified at 2d36bb1: `test/snapshot.test.ts:181-194` four failures, including `"replace after moving"` which calls the real `replaceSnapshot(join(tree, "does-not-exist"), snapshot)` (`:192`); `:197` `rejects(..., step === "replace after moving" ? /ENOENT/ : new RegExp(\`${step} failed\`))`; `:198` `readdirSync(dir).filter(startsWith(".snapshot-")) == []`; `:199` `deepEqual(readTree(snapshot), before)` | PASS |
+| C27 | one stdout line: 40-hex SHA + counts | `^C27 ` passed | verified at 2d36bb1: `test/snapshot.test.ts:209` `assert.equal(result.stdout, \`snapshot ${sha}: 2 files copied, 1 excluded, 1 symlinks omitted, 0 submodules omitted\n\`)` | PASS |
+| C28 | clone per README, exit 0, `.specs/` at pinned ref, absent from snapshot | `^C28 ` passed (network) | verified at 2d36bb1: `test/example.test.ts:14` `assert.equal(clone?.[1], "https://github.com/obogoni/playground")`; `:21` `assert.equal(profile.ref, "60ff14809dc31c700f9f987add96aae48f72cb97")`; `:22` `excludePaths.includes(".specs")`; `:23` `ls-tree ref .specs` non-empty; `:26` `status === 0`; `:28` `exists(snapshot/.specs) === false` | PASS |
+| C29 | check-ignore on the named paths | `^C29 ` passed | verified at 2d36bb1: `test/example.test.ts:34` `check-ignore -q --no-index`; `:41-48` ignored, including the directories `profiles/example/snapshot/`, `…/transcripts/`, `…/repo/` (`:42-44`); `:50` `assert.equal(ignored(path), true)`; `:52-53` not ignored: `profiles/example/profile.yaml`, `profiles/example/README.md` | PASS |
 
-## Swept rows resolving to existing
+## Reachability of the new assertions - verified at 2d36bb1
 
-None. Every Swept row points at a check or says *not in scope*, so there is nothing to read against the code.
+- **C8 prior-snapshot case.** If the `repoPath` replace at `test/snapshot.test.ts:50` had not matched, the profile would still point at `outer`, the run would succeed as it did at `:48`, and `:51` would fail. So the failing run really targets `inner`. The case does not re-assert the stderr, but the loop at `:44` already covers naming the path.
+- **C14 crafted tree.** I reproduced `commitCraftedGitDirs` in the scratchpad with the same `hash-object`, `mktree` and `commit-tree` sequence, then ran `git ls-tree -r --full-tree main`. The output lists `.git/config` and `lib/.git/hooks/x` next to `a.txt`, `lib/b.txt` and the `160000 vendor/sub` gitlink. So `listTree` now feeds `.git` segments into `copyTree`. They are skipped only by the guard at `src/snapshot/buildSnapshot.ts:78-83`. Without it, `:97-99` would write `snapshot/.git/config` and `:115` would fail. That guard is now reached.
+- **C17 post-copy failure.** `/gitleaks found/` (`:168`) is the `SecretsFoundError` from `src/snapshot/scan.ts:36`. It is raised after `steps.copy` (`buildSnapshot.ts:56-57`), so the failure is after staging and the copy. See N1 for the state it compares against.
+- **C25 CLI half.** The node binary copied as `gitleaks.exe` runs `node dir <scanRoot> …` and exits 1. `scan.ts:78` then produces `gitleaks exited 1: …`. The stub stands in for the binary on PATH, so the real `GITLEAKS` scanner path through `src/cli.ts` runs.
+- **C26 "replace after moving".** A previous snapshot exists (`:175`), so the real `replaceSnapshot` takes the move branch. `buildSnapshot.ts:115` renames `snapshot` to `<profile>/.snapshot-old-<hex>`, and `:117` fails with ENOENT on the missing source. ENOENT is not in `TRANSIENT_RENAME_CODES` (`:125`), so it is not retried. `:119` restores the old snapshot and `:120` rethrows. The old snapshot really is moved before the failure. If the restore at `:119` were dropped, `:198` would see a `.snapshot-old-*` entry and `:199` would fail on a missing `snapshot/`.
 
-## Coverage join
+## Round 1 findings
 
-Did not run: the join recompute is `standard`/`ui` only.
+| Gap | Status | Evidence |
+|---|---|---|
+| G1 C18 path not anchored | closed | `test/scan.test.ts:10` `FINDING_LINE = /^  - src\/settings\.ts:1 \(rule github-pat\)$/m`, used at `:32`, `:59`, `:69`, `:77`. It matches the printed shape `  - ${path}:${line} (rule ${rule})` (`src/snapshot/scan.ts:37`), and a `tree/` or `scan/tree/` prefix or an absolute path now fails |
+| G2 C25 level gap and undeclared exception | closed | CLI test `test/scan.test.ts:90-101` asserts `notEqual(result.status, 0)` (`:98`) and stderr (`:99`). The checklist now scopes C25 to the CLI for the error case and to `buildSnapshot` for the silent case, and the Coverage note declares the silent half as a second exception (`.checks/profile-snapshot.md:117`, `:165`) |
+| G3 C26 replace skipped the risky branch | closed | `test/snapshot.test.ts:190-194` drives the real `replaceSnapshot` through its move-then-fail-then-restore path (see reachability); Coverage row now has 4 members (`.checks/profile-snapshot.md:163`) |
+| G4 C8 unchanged only when absent | closed | `test/snapshot.test.ts:47-52`, `assert.deepEqual(readTree(join(dir, "snapshot")), before)` |
+| G5 Landing drift / C22 precision | partly closed | The Scan root row now matches the code: `scan/tree/`, `scan/canary.txt`, `ignore/` and `report.json` (`.checks/profile-snapshot.md:30` vs `buildSnapshot.ts:53-57`, `scan.ts:51-54`). C22 lists the three forms (`:108`), and they match `test/scan.test.ts:63`. Still open: the *gitleaks invocation* row (`.checks/profile-snapshot.md:32`) reads `gitleaks dir <staging> … --gitleaks-ignore-path <scan dir>/ignore … --report-path <scan dir>/report.json`, but the code runs `dir <staging>/scan` with ignore and report in `<staging>` (`scan.ts:58-59`, `:52`, `:54`). The fix did not touch that row. Checklist-only; no test depends on it |
+| G6 C13 precision | closed | C13 was reworded to the five shapes the test actually uses (`.checks/profile-snapshot.md:79` = `test/snapshot.test.ts:101`) |
+| G7 C17 failure before copy only | closed, with N1 | `test/snapshot.test.ts:161-169` adds a failure after the copy |
+| G8 C14 `.git` half vacuous | closed | Crafted tree puts `.git/config` and `lib/.git/hooks/x` into `ls-tree` output (reproduced); `:115` now discriminates |
+| G9 C28 expected values not readable | closed | `test/example.test.ts:14` and `:21` compare against the literal URL and SHA |
+| G10 C28 copy filter broken on Windows | closed | `test/example.test.ts:17` is now `[\\/]`. I read the regex source from the file and tested it: it returns `true` for `M:\a\profiles\example\repo` and `…\snapshot`, and `false` for `…\README.md` |
+| G11 C29 files, not directories | closed | `test/example.test.ts:42-44` |
+| G12 C1 only checks the working directory | accepted as-is | Checklist C1 (`.checks/profile-snapshot.md:41`) claims only "the working directory gains no entry". `test/profile.test.ts:15` `assert.deepEqual(readdirSync(cwd), [])` asserts exactly that. Against the checklist there is no gap. The narrowing from the task is a checklist choice, and step 1 does not run under `light` |
 
-## Test policy rows
+## New findings
 
-Did not run: `standard`/`ui` only. The checklist has no `Test policy` section anyway.
+- **N1 - C17's post-copy failure runs against a clean working tree** (low). Line `test/snapshot.test.ts:162` commits through `commitFiles`, which does `git add -A` (`test/helpers.ts:36`). That also commits the earlier dirty `a.txt` and the untracked `new.txt`. Rewriting `a.txt` with `"dirty"` at `:163` then writes the content it already has. Reproduced in the scratchpad: `git status --porcelain --untracked-files=all` is ` M a.txt` / `?? new.txt` before that commit and empty at `beforeLeak` (`:164`). So `:169` compares an empty porcelain. A post-copy regression that discarded working-tree changes (for example `reset --hard` or `checkout -- .`) would stay green on this leg. It is caught only on the pre-copy legs at `:155` and `:159`. HEAD and branch are still compared. The claim holds literally; the comment's intent ("dirty") is not met.
+- **N2 - G5 residual** (low, checklist): `.checks/profile-snapshot.md:32`, see the G5 row.
 
-## Faults injected
+Neither affects a verdict: each check's assertion targets the checklist value.
 
-Did not run: `standard`/`ui` only.
+## Swept rows resolving to existing - carried from 78c1dd1
 
-## Findings (ranked)
+None. Every Swept row points at a check or says *not in scope*.
 
-- **G1 - C18 assertion does not pin "repo-relative"** (`test/scan.test.ts:29`, also `:56`, `:66`, `:74`). `/src\/settings\.ts:1 \(rule github-pat\)/` is unanchored. It would also match `tree/src/settings.ts:1`, `scan/tree/src/settings.ts:1`, or an absolute staging path. The code prints `  - <path>:<line> (rule …)` (`src/snapshot/scan.ts:37`, path from `relative(treeRoot, file)` at `:102`). A regression that relativises against `scanRoot` or leaks the staging path would stay green. Anchor it, for example `/^  - src\/settings\.ts:1 \(rule github-pat\)$/m`.
-- **G2 - C25 level gap, and the checklist's own note is false.** The claim is about the command aborting with a message. The proof calls `buildSnapshot` in-process and asserts only the rejection (`test/scan.test.ts:95-97`), with no exit status and no stderr. The checklist's Coverage note says every output-naming proof runs the CLI "except C26". C25 is a second exception that was never declared. The CLI path is only covered transitively by `src/cli.ts:22`.
-- **G3 - C26 "replace" failure skips the risky branch** (`test/snapshot.test.ts:169`). The stub replaces the whole `replaceSnapshot`, so it rejects before any rename. The code that actually carries the claim is never exercised: `src/snapshot/buildSnapshot.ts:115-121`, which renames `snapshot` to `.snapshot-old-*`, then fails on `tree` to `snapshot`, then restores the old one. The Landing names this behaviour ("restore old if moved"), and it is the only path where a `.snapshot-old-*` entry or a missing `snapshot/` could be left behind. The claim covers more than the proof exercises.
-- **G4 - C8 "snapshot/ unchanged" is proven only for the absent case** (`test/snapshot.test.ts:43`). No prior snapshot exists, so an implementation that deleted an existing `snapshot/` before failing on `repoPath` would pass. C9 does this correctly (`:50`, `:56`).
-- **G5 - Checklist precision and Landing drift around the scan root.** Landing says staging holds `tree/` and `canary.txt` and that gitleaks scans the staging root. The code scans `<staging>/scan` holding `tree/` and `canary.txt`, with `ignore/` and `report.json` in `<staging>` (`src/snapshot/buildSnapshot.ts:53-57`, `src/snapshot/scan.ts:51-54`). The isolation is the same, but the one-way-door row does not match the code. Separately, C22's "every plausible form" is not a precise value: the test uses three relative forms (`test/scan.test.ts:60`). This is defensible because the real fingerprint's absolute staging path is random per run, but the checklist should list the forms.
-- **G6 - C13 precision gap: "those paths" is not C12's patterns.** The snapshot-level proof uses `config`, `*.pem`, `deep/**/*.pem`, `a?.txt`, `docs/**` (`test/snapshot.test.ts:93`). `config/**`, `**/*.pem` and the positive literal `a?.txt` are exercised only at unit level (`test/glob.test.ts`). The assertion is readable and correct for what it runs.
-- **G7 - C17's failed run fails before the copy** (`test/snapshot.test.ts:148`, bad ref). A failure after staging exists, such as a scan abort, is not checked for leaving `repoPath` intact. The claim literally holds ("a failed one"), but the proof exercises the least interesting failure.
-- **G8 - C14's `.git` half is near-vacuous.** The fixture cannot place a `.git` segment in the tree, so `:106` holds for any tree-object-based copier. The `.git`-segment guard in the code (`src/snapshot/buildSnapshot.ts:78-83`) is never reached by a test. It would only catch a checkout/`cp` implementation.
-- **G9 - C28 expected values are not readable at the assertion.** The clone URL is taken from the README by regex (`test/example.test.ts:13`, `:18`) and never compared with `https://github.com/obogoni/playground`. The ref is read from `profile.yaml` (`:20`) and never compared with `60ff14809dc31c700f9f987add96aae48f72cb97`. Both files do currently hold those values (verified by reading), but the proof would stay green if either changed.
-- **G10 - C28 copy filter is broken on Windows** (`test/example.test.ts:17`). `!/[\/](repo|snapshot)$/.test(source)` only matches `/`, and on Windows `source` uses `\`. Verified: the regex returns `false` for `M:\a\profiles\example\repo`. It passed here only because `profiles/example/repo` and `snapshot` do not exist locally. After a developer follows README step 1, the test copies the clone and `git clone` into the non-empty `repo/` fails. Use `[\\/]`.
-- **G11 - C29 checks files inside the directories, not the directories themselves** (`test/example.test.ts:41-43`). Low: running `git check-ignore --no-index` on the literal directory paths also reports them ignored (verified). Task criterion 20's "any `<name>`" is narrowed to `acme` by the checklist, which is an accepted narrowing.
-- **G12 - C1 narrows task criterion 1** ("creates no file or directory") to the working directory only (`test/profile.test.ts:15`). Low; it is a checklist choice, not a failing proof.
+## Coverage join - carried from 78c1dd1
 
-## Gate
+Did not run: the join recompute is `standard`/`ui` only. (The fix edited the `failing steps` row to 4 members; each member has a C26 case at `test/snapshot.test.ts:181-194`.)
+
+## Test policy rows - carried from 78c1dd1
+
+Did not run: `standard`/`ui` only; the checklist has no `Test policy` section.
+
+## Faults injected - carried from 78c1dd1
+
+Did not run: `standard`/`ui` only. Reachability of the new assertion surfaces was checked by reading and by scratch reproduction (above) instead.
+
+## Gate - verified at 2d36bb1
 
 `npx tsc --noEmit` - exit 0.

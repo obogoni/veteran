@@ -160,8 +160,10 @@ test("C17 repoPath is left as found after a successful and a failed run", () => 
 
   // A failure after the copy has started: the tree at the new ref holds a secret.
   commitFiles(repo, { "leak.txt": `token = "${fakeSecret()}"\n` }, "leak");
-  writeFileSync(join(repo, "a.txt"), "dirty");
+  writeFileSync(join(repo, "a.txt"), "dirty again");
+  writeFileSync(join(repo, "another-untracked.txt"), "untracked");
   const beforeLeak = repoState(repo);
+  assert.notEqual(beforeLeak.status, "");
   writeFileSync(join(dir, "profile.yaml"), readProfile(dir).replace("ref: missing", "ref: work"));
   const leaked = runCli(dir);
   assert.notEqual(leaked.status, 0);
