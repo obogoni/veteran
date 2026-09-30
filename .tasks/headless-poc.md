@@ -10,7 +10,9 @@ Today Veteran cannot answer anything. A support question still goes to a develop
 
 When this ships, an operator runs `veteran ask "<question>"` against a profile and gets an answer in business terms in the profile's language. The answer is split by branch, with suggested test scenarios, what it depends on, and the profile's version caveat. Every run leaves a JSONL transcript with its cost and duration. `veteran eval` runs the profile's eval cases and reports accuracy, cost and p50/p95 latency. Everything is proved on the example profile first. Pointing `VETERAN_PROFILE_DIR` at the real profile needs no code change. The author asked to see something working before curating the eval set, so this block runs ahead of block 2 (conversation of 2026-09-30).
 
-22 criteria in 6 slices · 6 one-way doors · 7 open, of which 0 block
+The agent runs on the operator's Claude Code login under the company's Enterprise plan, never on an API key (author, 2026-09-30: "não podemos usar credencial de API").
+
+23 criteria in 6 slices · 7 one-way doors · 7 open, of which 0 block
 
 ## Criteria
 
@@ -34,7 +36,8 @@ When this ships, an operator runs `veteran ask "<question>"` against a profile a
 
 11. If the run ends with `error_max_turns`, `error_max_budget_usd`, `error_max_structured_output_retries` or `error_during_execution`, or with an API error, then `veteran ask` exits `1` and stderr names that subtype or the API error status.
 12. If the run has not produced a result 300 s after it started, then it is aborted through its `AbortController`, `veteran ask` exits `1`, and stderr says it timed out after 300 s.
-13. Always, the query runs with `maxTurns: 40` and `maxBudgetUsd: 1.00`, as recorded in the transcript's summary line.
+13. Always, the query runs with `maxTurns: 40` and `maxBudgetUsd: 1.00`, as recorded in the transcript's summary line. Under a subscription `total_cost_usd` is the SDK's client-side estimate, and the budget limits that estimate.
+23. Always, the environment `ask` and the rubric judge hand to the SDK has no `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL`, even when the operator's shell sets them. The run authenticates only through the Claude Code login on the machine, and the `init` message's `apiKeySource` is recorded in the transcript. If there is no login, the run ends on an authentication error and 11 applies, with stderr adding that Claude Code must be logged in (`claude` → `/login`) with the Enterprise account.
 
 ### Every run leaves a transcript
 
@@ -51,8 +54,8 @@ When this ships, an operator runs `veteran ask "<question>"` against a profile a
 
 ### The example profile runs end to end
 
-21. Given a fresh clone, Playground cloned and the snapshot built as `profiles/example/README.md` instructs, when `VETERAN_PROFILE_DIR=profiles/example veteran eval` runs with API credentials, then it exits `0` over at least 5 real cases in `profiles/example/evals/`, all about Playground's business areas, and `profiles/example/evals/rubric.md` holds the five items from the block 2 draft.
-22. `profiles/example/README.md` gains the `veteran ask` and `veteran eval` commands. `README.md` documents both commands, the credentials they need, and that each `ask` can cost up to USD 1.00.
+21. Given a fresh clone, Playground cloned and the snapshot built as `profiles/example/README.md` instructs, when `VETERAN_PROFILE_DIR=profiles/example veteran eval` runs on a machine where Claude Code is logged in with the Enterprise account, then it exits `0` over at least 5 real cases in `profiles/example/evals/`, all about Playground's business areas, and `profiles/example/evals/rubric.md` holds the five items from the block 2 draft.
+22. `profiles/example/README.md` gains the `veteran ask` and `veteran eval` commands. `README.md` documents both commands, that they need a Claude Code login and never read an API key, and that each `ask` stops at an estimated USD 1.00 and counts against the account's plan usage.
 
 ## Out of scope
 
@@ -102,7 +105,7 @@ When this ships, an operator runs `veteran ask "<question>"` against a profile a
 | docs | `.design/veteran.md` *Configuration isolation*: `cwd: "/repo"` is the container path (block 5). Running locally, `cwd` is `<VETERAN_PROFILE_DIR>/snapshot`. Amend the row |
 | docs | `.tasks/eval-set.md` (paused): this block consumes its *Eval case format* and its draft accuracy rule (Unresolved 2 there). If block 2 changes either, `veteran eval` changes with it |
 | stored data | nothing to migrate |
-| tooling | new dependency `@anthropic-ai/claude-agent-sdk` (0.3.286 at planning time); API credentials needed to run `ask`/`eval` and their live proofs |
+| tooling | new dependency `@anthropic-ai/claude-agent-sdk` (0.3.286 at planning time); a Claude Code login (Enterprise account) on the machine that runs `ask`/`eval` and their live proofs; no API key anywhere |
 
 ## Decided
 
@@ -112,7 +115,8 @@ When this ships, an operator runs `veteran ask "<question>"` against a profile a
 | Answer shape | `VeteranAnswer = { answer: string, branches: {condition: string, behavior: string}[], suggestedTests: string[], clarifyingQuestion: string \| null, confidence: "high" \| "medium" \| "low", dependsOn: string[], caveats: string[], internalReferences: string[] }`, every field required, no extra fields; `versionCaveat` appended by the service, never asked of the model | Free text - design doc: branches and test scenarios come from the schema |
 | Read boundary before the container | `permissionMode: "dontAsk"`, `allowedTools: ["Read", "Grep", "Glob"]`, and a `PreToolUse` hook that returns `permissionDecision: "deny"` for any target outside the snapshot (criterion 8). The hook is the enforcement; `cwd` is not a boundary | Relying on `cwd` or on the prompt - the Read tool accepts absolute paths, and the full repository with its `.git` sits at `repoPath` on the same machine. Waiting for block 5 - the author runs this locally now |
 | System prompt | `systemPrompt` is a custom string: Veteran's base prompt (in this repository, English, telling the agent to answer in `profile.language`) followed by each `instructions` file of the profile in order. The `claude_code` preset is not used | The `claude_code` preset - it brings Claude Code's coding persona and environment sections, which assume a developer audience |
-| Rubric judge | a second `query()` from the same SDK with `model: "claude-sonnet-5-5"`, `tools: []`, `settingSources: []`, `maxTurns: 1` and `outputFormat` of `{ correct, businessLevel, byBranch, admitsUncertainty, noLeak }`, each `{ pass: boolean, reason: string }` | `@anthropic-ai/sdk` for the judge - a second dependency and a second credential path for one classification call |
+| Rubric judge | a second `query()` from the same SDK with `model: "claude-sonnet-5-5"`, `tools: []`, `settingSources: []`, `maxTurns: 1` and `outputFormat` of `{ correct, businessLevel, byBranch, admitsUncertainty, noLeak }`, each `{ pass: boolean, reason: string }` | `@anthropic-ai/sdk` for the judge - it needs an API key, which is ruled out |
+| Authentication | Claude Code's own login on the machine (Enterprise plan). `env` passed to `query()` is `process.env` minus `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` (criterion 23) | An API key from the Claude Console - ruled out by the author. `--bare` / a bare `claude -p` - bare mode "never reads OAuth credentials", so it cannot use the subscription |
 | Eval case format (from `.tasks/eval-set.md`) | JSONL: `{ id: string, question: string, referenceAnswer: string, expectedBranches?: { condition: string, behavior: string }[], followUp?: { message: string, referenceAnswer: string }, tags: string[], adversarial: boolean }`; `followUp` is accepted and ignored until spike 6 | Defining it here separately - two formats would drift, and block 2's operator writes against that one |
 
 ## Surface
@@ -128,6 +132,7 @@ When this ships, an operator runs `veteran ask "<question>"` against a profile a
 - `.design/veteran.md`, *Decisions* rows *Agent tools*, *Configuration isolation*, *Per-run limits*, *Answer shape*, *Models*, and the *Adds* lines for `ask.ts`, `answerSchema.ts`, `writeTranscript.ts`, `runEvals.ts`, `rubricJudge.ts` and `cli.ts`, copied literally into Decided.
 - `@anthropic-ai/claude-agent-sdk` 0.3.286 `sdk.d.ts` (read 2026-09-30). The options `tools`, `disallowedTools`, `allowedTools` ("to restrict which tools are available, use the `tools` option instead"), `settingSources` ("Pass `[]` to disable filesystem settings"), `permissionMode: 'dontAsk'` ("deny if not pre-approved"), `hooks`/`PreToolUse` with `permissionDecision: 'deny'`, `outputFormat` (`json_schema`), `maxTurns`, `maxBudgetUsd`, `abortController` and `systemPrompt` custom string. The result subtypes `success`, `error_max_turns`, `error_max_budget_usd`, `error_max_structured_output_retries`, `error_during_execution`, with `structured_output`, `total_cost_usd`, `duration_ms` and `num_turns`. The `init` message fields `tools`, `mcp_servers`, `cwd`, `model`, `permissionMode` and `plugins`.
 - `.tasks/eval-set.md` (paused): the eval case format and the draft accuracy rule.
+- `code.claude.com/docs/en/agent-sdk/overview` (fetched 2026-09-30): the note on claude.ai login for third-party products, quoted in Unresolved 1. `code.claude.com/docs/en/headless`: "bare mode doesn't use your subscription login", and "In bare mode, Claude Code never reads OAuth credentials or the system keychain".
 - User in this conversation, 2026-09-30: "eu quero primeiro ver funcionando alguma coisa e refinar as perguntas depois", and "bloco 3 no example primeiro".
 
 This task is the record of decision. If a linked document diverges, ask before building.
@@ -136,7 +141,7 @@ This task is the record of decision. If a linked document diverges, ask before b
 
 | # | Kind | Question | Until answered |
 |---|---|---|---|
-| 1 | blocks go-live | Which API credential runs `ask`/`eval`, and is the target code allowed to go to the API under it (design *Needs an RFC 1*)? | The example profile is public code, so every proof runs on it. The real profile waits for this answer |
+| 1 | blocks go-live | May support analysts use Veteran on the operator's Enterprise seat? The Agent SDK docs say: "Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK." Only the owner of the Enterprise contract can answer this, together with design *Needs an RFC 1* | Doesn't affect this block: the operator runs `ask` on their own login, like any Claude Code use. It blocks block 8 (support channel) and the real profile's pilot |
 | 2 | open | What does accuracy count? This is block 2's Unresolved 2 | Written as `correct` plus `byBranch` where it applies (17) |
 | 3 | open | How is stdout laid out for a language other than `pt-BR`? | Headings exist only in `pt-BR`. Any other `profile.language` makes `ask` exit `1` naming the language. The only profiles are `pt-BR` |
 | 4 | open | `ask` reading `snapshot/` while `veteran snapshot` replaces it | Unguarded. One operator runs both by hand, and the replace is a rename |

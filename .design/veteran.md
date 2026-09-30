@@ -133,6 +133,7 @@ Also in the field, for perspective and not as candidates: RAG over code embeddin
 | Decision | Choice | Why this | Alternative, and what would make it win | Reversibility |
 |---|---|---|---|---|
 | Language and runtime | TypeScript on Node, `@anthropic-ai/claude-agent-sdk` | One language for agent, validation and the pilot web chat | Python SDK, if the author prefers it; there is no code yet | costly |
+| Authentication | Claude Code login under the company Enterprise plan; no API key (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` stripped from the agent env) | The author cannot use API credentials (2026-09-30) | An API key, if the pilot needs one (see Needs an RFC 1) | costly |
 | Agent tools | `tools: ["Read", "Grep", "Glob"]`, `disallowedTools: ["Bash", "Write", "Edit", "WebFetch", "WebSearch"]` | What the agent cannot reach cannot leak; `allowedTools` alone does not restrict | None: a shell "just for grep" is the roadmap's anti-pattern | reversible |
 | Configuration isolation | `settingSources: []`, `cwd: "/repo"` inside the container (block 5); running locally, `cwd` is `<VETERAN_PROFILE_DIR>/snapshot` and a `PreToolUse` hook denies reads outside it (`.tasks/headless-poc.md`) | The target codebase ships agent instruction files; loading them would be injection from the repository itself. Locally, the full repository sits at `repoPath` on the same machine, so `cwd` alone is not a boundary | None | reversible |
 | Per-run limits | `maxTurns: 40`, `maxBudgetUsd: 1.00`, 5 min timeout in the caller | A large repository makes the agent wander; values are recalibrated from the eval p95 | Higher, if the eval shows truncated answers | reversible |
@@ -148,7 +149,7 @@ Also in the field, for perspective and not as candidates: RAG over code embeddin
 
 ## Needs an RFC
 
-1. Where the pilot runs and who authorizes it. The snapshot contains the employer's code, and running it on personal infrastructure is not acceptable without authorization. The options are the developer's workstation, a company VM or the company cloud. This blocks blocks 5 (in its final form) and 8, and the decision belongs to whoever owns the code, not to the author.
+1. Where the pilot runs and who authorizes it. The snapshot contains the employer's code, and running it on personal infrastructure is not acceptable without authorization. The options are the developer's workstation, a company VM or the company cloud. This blocks blocks 5 (in its final form) and 8, and the decision belongs to whoever owns the code, not to the author. It must also settle whether support may use Veteran on an Enterprise seat: the Agent SDK docs say that "unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK". Inside the container (block 5), how the login reaches the agent is also open.
 
 ## Needs a spike
 
