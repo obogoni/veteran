@@ -1,0 +1,11 @@
+node_modules/
+
+# Profiles hold target-codebase knowledge and never enter git, except the example.
+profiles/*
+!profiles/example/
+
+# Generated inside the example profile (real profiles are ignored whole above).
+profiles/example/repo/
+profiles/example/snapshot/
+profiles/example/transcripts/
+profiles/example/.snapshot-*/

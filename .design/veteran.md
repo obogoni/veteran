@@ -86,7 +86,8 @@ The bet: **a single TypeScript process**, where the Agent SDK runs one read-only
 
 - `package.json`, `tsconfig.json`: Node/TypeScript project depending on `@anthropic-ai/claude-agent-sdk`.
 - `src/profile/loadProfile.ts`: reads `<VETERAN_PROFILE_DIR>/profile.yaml` (fields in Decisions).
-- `src/snapshot/buildSnapshot.ts`: `veteran snapshot` command. Copies the profile's `ref` into `<VETERAN_PROFILE_DIR>/snapshot/` applying `excludePaths`, runs gitleaks and **aborts** on any finding.
+- `src/snapshot/buildSnapshot.ts`: `veteran snapshot` command. Copies the profile's `ref` into a staging directory applying `excludePaths` (no `.git`, no symlinks), runs gitleaks with Veteran's own configuration and **aborts** on any finding or scan error; only a clean staging replaces `<VETERAN_PROFILE_DIR>/snapshot/`.
+- `config/gitleaks.toml`: Veteran's gitleaks configuration (`[extend] useDefault = true`), passed explicitly on every scan so no configuration is ever read from the snapshot.
 - `src/agent/ask.ts`: `ask({ profile, question, sessionId? }) → VeteranAnswer` via `query()`, with the literal options in Decisions.
 - `src/agent/answerSchema.ts`: JSON Schema for `VeteranAnswer`.
 - `src/validate/deterministic.ts`: blocks code fences, file paths, CamelCase/snake_case identifiers with dots or parentheses, SQL keywords, stack-trace shapes, secret patterns and the profile's `denyTerms`.
@@ -96,8 +97,8 @@ The bet: **a single TypeScript process**, where the Agent SDK runs one read-only
 - `src/evals/runEvals.ts` + `src/evals/rubricJudge.ts`: `veteran eval` command. Runs `<VETERAN_PROFILE_DIR>/evals/*.jsonl` and reports accuracy, leak rate, cost and latency (p50/p95).
 - `src/cli.ts`: `veteran ask "<question>" [--session <id>]`, `veteran eval`, `veteran snapshot`.
 - `Dockerfile` + `compose.yaml`: non-root user, snapshot mounted read-only at `/repo`, network egress allowed only to `api.anthropic.com`.
-- `profiles/example/`: an example profile over a small public codebase. The real profile never enters git.
-- `.gitignore`: ignores `profiles/*` except `profiles/example/`, plus `snapshot/` and `transcripts/`.
+- `profiles/example/`: an example profile over the author's public `obogoni/playground` repository, cloned into `profiles/example/repo/` and pinned to a commit. The real profile never enters git.
+- `.gitignore`: ignores `profiles/*` except `profiles/example/`, plus the example's `repo/`, `snapshot/` and `transcripts/` (anchored there, since a bare `snapshot/` would also ignore `src/snapshot/`).
 
 ### Changes
 
@@ -137,7 +138,7 @@ Also in the field, for perspective and not as candidates: RAG over code embeddin
 | Per-run limits | `maxTurns: 40`, `maxBudgetUsd: 1.00`, 5 min timeout in the caller | A large repository makes the agent wander; values are recalibrated from the eval p95 | Higher, if the eval shows truncated answers | reversible |
 | Answer shape | `outputFormat: { type: "json_schema", schema }` with `VeteranAnswer = { answer: string, branches: {condition: string, behavior: string}[], suggestedTests: string[], clarifyingQuestion: string \| null, confidence: "high" \| "medium" \| "low", dependsOn: string[], caveats: string[], internalReferences: string[] }`; `versionCaveat` appended by the service | By-branch answers and test scenarios come from the schema, not free text; `internalReferences` never reaches support | Free text, if the schema degrades quality in the eval | costly |
 | Conversation | SDK `resume: <sessionId>`; session valid for 7 days | Contradiction is the core state; the session keeps what was already read | Re-send a summarized history with each question, if spike 6 shows poor cost or quality | reversible |
-| Path exclusion | Physical: `excludePaths` applied when copying the snapshot + gitleaks aborts the snapshot | "If the agent can't read it, no injection can extract it" | Per-tool deny: rejected, because it depends on the SDK obeying | costly |
+| Path exclusion | Physical: `excludePaths` applied when copying the snapshot (no `.git`, no symlinks) + gitleaks aborts the snapshot. gitleaks runs as `gitleaks dir <staging> --config config/gitleaks.toml --gitleaks-ignore-path <empty dir outside the snapshot> --ignore-gitleaks-allow --redact` | "If the agent can't read it, no injection can extract it". Without `--config`, gitleaks loads a `.gitleaks.toml` from the scanned directory, and it honours `.gitleaksignore` and `gitleaks:allow` comments, so the target repository could allowlist its own secrets - the same injection `settingSources: []` closes for the agent. gitleaks also reads `.gitleaksignore` at the root of whatever it scans, despite `--gitleaks-ignore-path`, so it scans a directory one level above the tree; and it exits `0` when it cannot read its target, so a fresh canary secret planted per run must be reported for the scan to count | Per-tool deny: rejected, because it depends on the SDK obeying | costly |
 | Profile | `profile.yaml`: `name`, `repoPath`, `ref`, `language: "pt-BR"`, `instructions: [.md files]`, `excludePaths: [glob]`, `denyTerms: [string]`, `versionCaveat: string`; directory via `VETERAN_PROFILE_DIR` | Agnostic by boundary, without generalizing before a 2nd codebase; the real profile stays out of the personal repo | One profile per codebase inside the repo: only for public codebases | costly |
 | Models | Agent `claude-opus-5-5`; judges (validation and rubric) `claude-sonnet-5-5` | Reading code precisely is the bottleneck; the judge does a cheap classification | Opus judge, if agreement with developers stays below 80% | reversible |
 | Fail closed | 1 regeneration with feedback; on second failure, fixed fallback + escalation text | Never deliver a flagged answer | None | reversible |
@@ -166,6 +167,7 @@ Also in the field, for perspective and not as candidates: RAG over code embeddin
 ## Sources
 
 - The 7-phase roadmap provided by the author (conversation of 2026-09-30): phase ordering, validation pipeline, sandbox recommendations.
+- gitleaks README, `github.com/gitleaks/gitleaks` (read 2026-09-30): configuration precedence ending in "a `.gitleaks.toml` file within the target path", `--gitleaks-ignore-path` defaulting to `.`, `--ignore-gitleaks-allow`, `--redact`.
 - Agent SDK TypeScript documentation, `code.claude.com/docs/en/agent-sdk/typescript`: `tools`, `disallowedTools`, `allowedTools` ("does not restrict Claude to only these tools"), `maxTurns`, `resume`, `outputFormat`/`structured_output`, `settingSources`, `maxBudgetUsd`, `total_cost_usd`, `duration_ms`.
 - The existing functional-explanation skill in the target codebase, read locally and not quoted here: analysis flow, style rules and the 13 format evals.
 - A real support ↔ developer conversation (screenshot provided by the author): the unbranched-answer case.
