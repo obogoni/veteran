@@ -1,0 +1,15 @@
+# Example profile over the author's public Playground repository.
+# Clone it first - see README.md. Real profiles live outside this repository.
+name: playground
+repoPath: ./repo
+ref: 60ff14809dc31c700f9f987add96aae48f72cb97
+language: pt-BR
+instructions:
+  - instructions/overview.md
+excludePaths:
+  - .specs
+  - .vscode
+denyTerms:
+  - config-store
+  - workspace-config
+versionCaveat: "Comportamento da versão atual (main); builds locais ou forks podem se comportar de outro jeito."
