@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Veteran answers business-rule questions from non-technical people (support) using a read-only agent over a filtered snapshot of a codebase. Answers use business terms and never include code, internal names or secrets. The full design, including a roadmap of 8 blocks and a table of literal decisions, is in `.design/veteran.md`. Read it before starting a new block. The decisions there carry their exact shape, so copy them instead of re-deriving them. Only block 1 (profile + filtered snapshot) exists so far, so there is no `ask`/`eval` command and no Agent SDK dependency yet.
+Veteran answers business-rule questions from non-technical people (support) using a read-only agent over a filtered snapshot of a codebase. Answers use business terms and never include code, internal names or secrets. The full design, including a roadmap of 8 blocks and a table of literal decisions, is in `.design/veteran.md`. Read it before starting a new block. The decisions there carry their exact shape, so copy them instead of re-deriving them. Blocks 1 (profile + filtered snapshot) and 3 (headless PoC: `veteran ask`, `veteran eval`) exist. Block 2 (the real eval set) is paused behind block 3.
 
 ## Commands
 
@@ -17,7 +17,9 @@ npm run typecheck                                         # tsc --noEmit
 VETERAN_PROFILE_DIR=profiles/example node src/cli.ts snapshot
 ```
 
-The tests need `git` and `gitleaks` (8.19 or later) on `PATH`. `test/example.test.ts` also clones `github.com/obogoni/playground` over the network. The CLI's only command is `veteran snapshot`, which exits `1` with the reason on stderr for any failure.
+The tests need `git` and `gitleaks` (8.19 or later) on `PATH`. `test/example.test.ts` also clones `github.com/obogoni/playground` over the network. The commands are `veteran snapshot`, `veteran ask "<question>"` and `veteran eval`. Each exits `1` with the reason on stderr for any failure.
+
+`test/live.test.ts` runs the real agent and only runs with `VETERAN_LIVE=1`. It needs Claude Code logged in with the Enterprise account, and it costs plan usage. Veteran never uses an API key: the agent's env drops `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL`. Every other test drives the CLI in-process through `runCommand` with a fake `query` (`test/fakes.ts`).
 
 ## Architecture
 
@@ -32,6 +34,12 @@ The tests need `git` and `gitleaks` (8.19 or later) on `PATH`. `test/example.tes
   - Each run plants a fresh canary secret, because gitleaks exits `0` when it cannot read its target. If the canary is not reported, the scan counts as incomplete and the snapshot is aborted.
 
   Every one of these points is fail-closed on purpose. Keep them.
+- `src/agent/ask.ts` runs one question through the SDK's `query()` with the options from the design doc (`tools: ["Read", "Grep", "Glob"]`, `settingSources: []`, `permissionMode: "dontAsk"`, `cwd` = snapshot, 40 turns, estimated USD 1.00, 300 s abort) and writes the transcript (`src/transcripts/writeTranscript.ts`). Hardening that is easy to break by accident:
+  - `src/agent/boundary.ts` is a `PreToolUse` hook that denies every `Read`/`Grep`/`Glob` target that resolves outside the snapshot, and every other tool except `StructuredOutput`. `cwd` is not a boundary: the model rewrites `../x` into an absolute path.
+  - `src/agent/sdk.ts` switches off the built-in plugins through `settings.enabledPlugins` (`agents-md` would load instruction files from the repository), sets `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS=1`, and strips the API credentials. If `init` lists an unexpected tool, MCP server or plugin, the run is aborted.
+
+  Keep all of these fail-closed.
+- `src/evals/` loads `evals/*.jsonl` (format in `.tasks/eval-set.md`) and runs the real cases sequentially through `ask`. `rubricJudge.ts` grades each answer with `claude-sonnet-5-5` and no tools.
 - Windows: renames retry on transient `EPERM`/`EACCES`/`EBUSY` (antivirus/indexer locks), and `rmSync` uses `maxRetries`.
 
 Tests build throwaway repos and profiles in the OS temp directory through `test/helpers.ts` (`makeRepo`, `commitFiles`, `commitRawEntry` for symlink/gitlink entries, `makeProfile`, `runCli`).

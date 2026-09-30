@@ -6,7 +6,7 @@ The full design is in [`.design/veteran.md`](.design/veteran.md), and the roadma
 
 ## Status
 
-Block 1 of 8 is done: **profile + filtered snapshot**. Veteran cannot answer questions yet. That starts with block 3 (headless PoC).
+Blocks 1 and 3 of 8 are done: **profile + filtered snapshot** and the **headless PoC** (`veteran ask` / `veteran eval`). Block 2 (the real eval set) is paused behind block 3. Output validation (block 4) is not there yet, so an answer is not yet checked for leaks before it is printed.
 
 What works today:
 
@@ -16,13 +16,19 @@ What works today:
   - The copy is scanned with gitleaks, and any finding or scan failure aborts it.
   - The previous snapshot is replaced only when the new one is clean.
   - The source repository is never modified.
-- **Example profile** over [obogoni/playground](https://github.com/obogoni/playground), in [`profiles/example/`](profiles/example/).
+- **`veteran ask "<question>"`.** A read-only agent answers over the snapshot, in the profile's language and in business terms. The answer is split by case, with suggested tests, what it depends on, caveats and the profile's version caveat.
+  - The agent only has `Read`, `Grep` and `Glob`, and a hook denies any read outside `snapshot/`.
+  - No `CLAUDE.md`, settings, skills or plugins are loaded from the snapshot or from your home.
+  - Each run writes a JSONL transcript to `<VETERAN_PROFILE_DIR>/transcripts/`.
+- **`veteran eval`.** It runs the profile's eval cases through `ask`, grades each answer with a rubric judge, and reports accuracy, cost and p50/p95 latency.
+- **Example profile** over [obogoni/playground](https://github.com/obogoni/playground), in [`profiles/example/`](profiles/example/), with 6 eval cases and a rubric.
 
 ## Requirements
 
 - Node.js 24 or later. TypeScript runs directly, with no build step.
 - `git` on `PATH`.
 - [gitleaks](https://github.com/gitleaks/gitleaks) 8.19 or later on `PATH` (tested with 8.30.1). On Windows: `winget install Gitleaks.Gitleaks`.
+- For `ask` and `eval`: [Claude Code](https://code.claude.com) logged in on the machine (`claude`, then `/login`) with the Enterprise account. Veteran never reads an API key. It strips `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` from the agent's environment, so the run always uses the Claude Code login.
 
 ## Quick start
 
@@ -41,6 +47,19 @@ snapshot 60ff14809dc31c700f9f987add96aae48f72cb97: 430 files copied, 219 exclude
 ```
 
 On any failure it exits `1` and prints the reason to stderr. For a detected secret, the reason includes the file, line and rule, with the value redacted.
+
+Then ask a question and run the eval set:
+
+```sh
+VETERAN_PROFILE_DIR=profiles/example node src/cli.ts ask "Posso abrir um agente direto pelo cartão de uma tarefa?"
+VETERAN_PROFILE_DIR=profiles/example node src/cli.ts eval
+```
+
+`veteran ask` prints the answer on stdout. On stderr its last line gives the transcript path, the estimated cost and the duration. It exits `1` when the agent hits a limit (40 turns, an estimated USD 1.00, or 5 minutes) or when the answer does not match the schema.
+
+`veteran eval` prints one line per case and a summary line. The summary gives accuracy, total cost and p50/p95 latency.
+
+Cost: each `ask` stops at an **estimated USD 1.00** (the SDK's client-side estimate) and counts against the account's plan usage. An eval run costs one `ask` plus one judge call per case.
 
 ## Profiles
 
@@ -61,7 +80,23 @@ denyTerms: []               # internal names answers must never contain
 versionCaveat: "Behaviour of the current version; customer-specific builds may differ."
 ```
 
-`language`, `instructions`, `denyTerms` and `versionCaveat` are validated now but only used from blocks 3 and 4 on.
+`language` sets the answer language (only `pt-BR` for now). `instructions` are appended to Veteran's system prompt. `versionCaveat` closes every answer. `denyTerms` is validated now and is used from block 4 on.
+
+## Eval set
+
+`veteran eval` reads `<VETERAN_PROFILE_DIR>/evals/*.jsonl`, one case per line, and `<VETERAN_PROFILE_DIR>/evals/rubric.md`:
+
+```json
+{"id": "pg-agents-1", "question": "Posso abrir um agente direto pelo cartão de uma tarefa?", "referenceAnswer": "Só quando a tarefa já tem pelo menos um worktree...", "expectedBranches": [{"condition": "A tarefa não tem nenhum worktree", "behavior": "O botão fica desativado"}], "tags": ["agents"], "adversarial": false}
+```
+
+- `id`, `question` and `referenceAnswer` are non-empty strings, and `id` is unique across the files.
+- `tags` is a list of strings and `adversarial` is a boolean.
+- `expectedBranches` (optional) is a list of `{ condition, behavior }`.
+- `followUp` (optional) is `{ message, referenceAnswer }`, for the multi-turn spike.
+- No other field is accepted. Every problem is reported in one run as `file:line`, before any agent starts.
+
+The judge scores each answer on `correct`, `businessLevel`, `byBranch`, `admitsUncertainty` and `noLeak`. A case is accurate when `correct` passes and, for a case with expected branches, `byBranch` passes too. Adversarial cases are skipped until block 4.
 
 `excludePaths` syntax:
 
@@ -77,6 +112,7 @@ Real profiles never enter git: `.gitignore` ignores everything under `profiles/`
 
 ```sh
 npm test            # node:test suites; needs git and gitleaks, and one test clones Playground
+VETERAN_LIVE=1 node --test test/live.test.ts   # runs the real agent on the Claude Code login; costs plan usage
 npm run typecheck   # tsc --noEmit
 ```
 
