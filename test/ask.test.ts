@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { ANSWER_SCHEMA } from "../src/agent/answerSchema.ts";
 import { DISABLED_PLUGINS } from "../src/agent/sdk.ts";
 import { ANSWER, askProfile, fakeQuery, readTranscript, run, transcriptsOf } from "./fakes.ts";
+import { tempDir } from "./helpers.ts";
 
 const Q = "A devolução do cartão desativa o cartão?";
 
@@ -110,10 +111,14 @@ test("C7 the query carries the decided isolation options", async () => {
   assert.equal(options.hooks?.PreToolUse?.length, 1);
 });
 
-test("C7 an init with an unexpected tool, MCP server or other cwd aborts with exit 1 naming it", async () => {
+test("C7 an init with an unexpected tool, MCP server, cwd, model or permission mode aborts with exit 1 naming it", async () => {
   const cases: [Record<string, unknown>, RegExp][] = [
     [{ tools: ["Read", "Grep", "Glob", "StructuredOutput", "Bash"] }, /unexpected tool set \[Bash, Glob, Grep, Read, StructuredOutput\]/],
+    [{ tools: ["Read", "Grep", "Glob"] }, /unexpected tool set \[Glob, Grep, Read\]/],
     [{ mcp_servers: [{ name: "linear", status: "connected" }] }, /unexpected MCP servers: linear/],
+    [{ cwd: tempDir("elsewhere") }, /unexpected cwd /],
+    [{ model: "claude-sonnet-5-5" }, /unexpected model "claude-sonnet-5-5", expected "claude-opus-5-5"/],
+    [{ permissionMode: "bypassPermissions" }, /unexpected permission mode "bypassPermissions", expected "dontAsk"/],
   ];
   for (const [init, message] of cases) {
     const dir = askProfile();
@@ -174,6 +179,24 @@ test("C12 no result before the timeout aborts the run, exits 1 and reports the t
   assert.equal(fake.calls[0]!.options.abortController?.signal.aborted, true);
 });
 
+test("C12 a stuck SDK that ignores the abort still ends the run at the timeout", async () => {
+  const dir = askProfile();
+  const started = Date.now();
+  const result = await run(["ask", Q], dir, fakeQuery({ hangIgnoringAbort: true }).query, { timeoutMs: 800 });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /timed out after 1 s/);
+  assert.ok(Date.now() - started < 5000);
+  const summary = readTranscript(transcriptsOf(dir)[0]!).at(-1)!;
+  assert.equal(summary.subtype, "aborted");
+});
+
+test("C12 a result that arrived before the timeout is kept even if the stream then stalls", async () => {
+  const dir = askProfile();
+  const result = await run(["ask", Q], dir, fakeQuery({ hangAfterResult: true }).query, { timeoutMs: 800 });
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /^Depende do tipo do cartão\./);
+});
+
 test("C12 the default timeout is 300 s", async () => {
   const { TIMEOUT_MS } = await import("../src/agent/ask.ts");
   assert.equal(TIMEOUT_MS, 300_000);
@@ -230,16 +253,31 @@ test("C15 stderr's last line carries the transcript path, the cost and the secon
     assert.equal(last, `transcript: ${transcript} · cost: $0.1234 (estimated) · 4.2 s`);
     assert.ok(existsSync(transcript!));
   }
+  const dir = askProfile();
+  const timedOut = await run(["ask", Q], dir, fakeQuery({ hang: true }).query, { timeoutMs: 500 });
+  const [transcript] = transcriptsOf(dir);
+  const last = timedOut.stderr.trimEnd().split("\n").at(-1)!;
+  assert.ok(last.startsWith(`transcript: ${transcript} · cost: $0.0000 (estimated) · `), last);
+  assert.match(last, / · \d+\.\d s$/);
 });
 
 test("C23 the agent never receives an API key, token or base URL from the operator's env", async () => {
   const dir = askProfile();
   const fake = fakeQuery({});
-  const env = { ANTHROPIC_API_KEY: "sk-ant-should-not-pass", ANTHROPIC_AUTH_TOKEN: "tok", ANTHROPIC_BASE_URL: "https://proxy.invalid", KEEP_ME: "1" };
+  const env = {
+    ANTHROPIC_API_KEY: "sk-ant-should-not-pass",
+    ANTHROPIC_AUTH_TOKEN: "tok",
+    ANTHROPIC_BASE_URL: "https://proxy.invalid",
+    anthropic_api_key: "sk-ant-lowercase",
+    Anthropic_Auth_Token: "mixed",
+    KEEP_ME: "1",
+  };
   const result = await run(["ask", Q], dir, fake.query, { env });
   assert.equal(result.code, 0, result.stderr);
   const passed = fake.calls[0]!.options.env!;
-  for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]) assert.ok(!(key in passed), key);
+  for (const key of Object.keys(passed)) {
+    assert.ok(!["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"].includes(key.toUpperCase()), key);
+  }
   assert.equal(passed.KEEP_ME, "1");
 });
 
@@ -254,5 +292,15 @@ test("C23 an authentication failure adds the /login hint", async () => {
     const result = await run(["ask", Q], dir, fakeQuery(scenario).query);
     assert.equal(result.code, 1);
     assert.match(result.stderr, /Claude Code must be logged in with the Enterprise account: run `claude`, then `\/login`\./);
+  }
+});
+
+test("C23 other failures, even about login rules, get no /login hint", async () => {
+  const dir = askProfile();
+  const answer = { ...ANSWER, answer: "O login exige autenticação em dois fatores.", confidence: "sure" };
+  for (const scenario of [{ answer }, { result: { is_error: true, api_error_status: 529, result: "Overloaded" } }]) {
+    const result = await run(["ask", "Como funciona a autenticação no login?"], dir, fakeQuery(scenario).query);
+    assert.equal(result.code, 1);
+    assert.ok(!result.stderr.includes("/login"), result.stderr);
   }
 });

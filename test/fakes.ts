@@ -36,6 +36,10 @@ export interface FakeScenario {
   messages?: Record<string, unknown>[];
   /** Never yields a result; rejects when the caller aborts. */
   hang?: boolean;
+  /** Never yields a result and ignores the abort signal, like a stuck SDK. */
+  hangIgnoringAbort?: boolean;
+  /** Yields the result, then never ends the stream and ignores the abort signal. */
+  hangAfterResult?: boolean;
   /** Called before the result is yielded, e.g. to exercise the hook. */
   during?: (options: Options) => Promise<void>;
   /** Yield no init message at all. */
@@ -79,6 +83,7 @@ export function fakeQuery(...scenarios: FakeScenario[]): { query: QueryFn; calls
             signal?.addEventListener("abort", () => reject(new Error("aborted")));
           });
         }
+        if (scenario.hangIgnoringAbort) await new Promise(() => undefined);
         await new Promise((resolve) => setTimeout(resolve, 5));
         yield {
           type: "result",
@@ -93,6 +98,7 @@ export function fakeQuery(...scenarios: FakeScenario[]): { query: QueryFn; calls
           errors: [],
           ...scenario.result,
         } as unknown as SDKMessage;
+        if (scenario.hangAfterResult) await new Promise(() => undefined);
       } finally {
         active--;
       }

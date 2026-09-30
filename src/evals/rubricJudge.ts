@@ -9,6 +9,9 @@ import type { EvalCase } from "./cases.ts";
 
 export const JUDGE_MODEL = "claude-sonnet-5-5";
 export const JUDGE_MAX_TURNS = 1;
+/** Guards, not decisions: one classification call should take seconds and cents. */
+export const JUDGE_TIMEOUT_MS = 120_000;
+export const JUDGE_MAX_BUDGET_USD = 0.25;
 export const RUBRIC_ITEMS = ["correct", "businessLevel", "byBranch", "admitsUncertainty", "noLeak"] as const;
 export type RubricItem = (typeof RUBRIC_ITEMS)[number];
 export type Verdict = Record<RubricItem, { pass: boolean; reason: string }>;
@@ -32,6 +35,7 @@ const SYSTEM = `You grade answers written for non-technical support staff about 
 export interface JudgeDeps {
   query: QueryFn;
   env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
 }
 
 export interface JudgeResult {
@@ -61,6 +65,8 @@ export async function judgeAnswer(evalCase: EvalCase, answer: VeteranAnswer, rub
   const cwd = mkdtempSync(join(tmpdir(), "veteran-judge-"));
   const denials: Denial[] = [];
   let result: Extract<SDKMessage, { type: "result" }> | undefined;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? JUDGE_TIMEOUT_MS);
   try {
     for await (const message of deps.query({
       prompt: judgePrompt(evalCase, answer, rubric),
@@ -71,19 +77,23 @@ export async function judgeAnswer(evalCase: EvalCase, answer: VeteranAnswer, rub
         tools: [],
         systemPrompt: SYSTEM,
         maxTurns: JUDGE_MAX_TURNS,
+        maxBudgetUsd: JUDGE_MAX_BUDGET_USD,
+        abortController: controller,
         outputFormat: { type: "json_schema", schema: VERDICT_SCHEMA },
         hooks: { PreToolUse: [{ hooks: [boundaryHook(cwd, denials, false)] }] },
       },
     })) {
       if (isInit(message)) {
-        const problems = initProblems(message, [STRUCTURED_OUTPUT_TOOL]);
+        const problems = initProblems(message, { tools: [STRUCTURED_OUTPUT_TOOL], cwd, model: JUDGE_MODEL, permissionMode: "dontAsk" });
         if (problems.length > 0) return { error: `judge session is not isolated: ${problems.join("; ")}`, costUsd: 0 };
       }
       if (message.type === "result") result = message;
     }
   } catch (error) {
-    return { error: `judge failed: ${error instanceof Error ? error.message : String(error)}`, costUsd: result?.total_cost_usd ?? 0 };
+    const reason = controller.signal.aborted ? "timed out" : error instanceof Error ? error.message : String(error);
+    return { error: `judge failed: ${reason}`, costUsd: result?.total_cost_usd ?? 0 };
   } finally {
+    clearTimeout(timer);
     rmSync(cwd, { recursive: true, force: true, maxRetries: 3 });
   }
   const costUsd = result?.total_cost_usd ?? 0;

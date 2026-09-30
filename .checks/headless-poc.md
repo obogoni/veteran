@@ -39,6 +39,8 @@ New `src/agent/` (the answer schema, the system prompt, the read boundary, the S
 | Rubric judge (task) | `query()` with `model: "claude-sonnet-5-5"`, `tools: []`, `settingSources: []`, `maxTurns: 1`, the same plugin and env hardening, the hook denying everything except `StructuredOutput`, `cwd` a fresh temp dir; `outputFormat` of the five items, each `{ pass, reason }` | `@anthropic-ai/sdk` - needs an API key |
 | Transcript file (task) | `<profile>/transcripts/<YYYYMMDDTHHmmssSSSZ>-<8 hex>.jsonl`, appended as messages arrive (so a timeout leaves the file). The lines are the SDK messages verbatim, then `{ "type": "summary", question, sessionId, subtype, total_cost_usd, duration_ms, num_turns, maxTurns, maxBudgetUsd, answer, validation: [], hookDenials: [{ tool, target, reason }], error }` | one JSON document written at the end - a timeout or crash would leave nothing |
 
+| Verifier round 1 fixes (found while building) | `init` must also match `cwd` (compared by real path, so a Windows 8.3 short name equals its long form), `model` and `permissionMode`, otherwise the run aborts. The boundary denies any `..` segment outright (a glob `**` can match zero folders), `~`, `%VAR%`, `$VAR` and `${VAR}`, and accepts a target under the snapshot's given or real path. Env stripping ignores name case (Windows). Every step of the stream races a hard deadline, so a stuck SDK that ignores the abort still ends at the timeout, and a result that already arrived wins over a late timeout. The judge gets a 120 s abort and an estimated USD 0.25 cap as guards | resolving `..` and trusting containment - `**/../x` resolves inside while the glob can climb out |
+
 - Nothing else in this change is hard to reverse
 
 ## Checks

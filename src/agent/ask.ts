@@ -71,6 +71,13 @@ export async function ask(profile: Profile, question: string, deps: AskDeps): Pr
   let error: string | undefined;
   const retryErrors: string[] = [];
 
+  let timedOut = false;
+  const deadline = new Promise<"deadline">((resolve) =>
+    controller.signal.addEventListener("abort", () => resolve("deadline"), { once: true }),
+  );
+  let iterator: AsyncIterator<SDKMessage> | undefined;
+  let finished = false;
+
   try {
     const messages = deps.query({
       prompt: question,
@@ -89,14 +96,30 @@ export async function ask(profile: Profile, question: string, deps: AskDeps): Pr
         hooks: { PreToolUse: [{ hooks: [boundaryHook(snapshot, denials)] }] },
       },
     });
-    for await (const message of messages) {
+    iterator = messages[Symbol.asyncIterator]();
+    // Racing every step against the deadline stops the run even if the SDK ignores the abort.
+    for (;;) {
+      const next = await Promise.race([iterator.next(), deadline]);
+      if (next === "deadline") {
+        timedOut = !error;
+        break;
+      }
+      if (next.done) {
+        finished = true;
+        break;
+      }
+      const message = next.value;
       transcript.write(message);
       if (isInit(message)) {
         sessionId = message.session_id;
-        const problems = initProblems(message, [...READ_TOOLS, STRUCTURED_OUTPUT_TOOL]);
+        const problems = initProblems(message, {
+          tools: [...READ_TOOLS, STRUCTURED_OUTPUT_TOOL],
+          cwd: snapshot,
+          model: AGENT_MODEL,
+          permissionMode: "dontAsk",
+        });
         if (problems.length > 0) {
           error = `the agent session is not isolated: ${problems.join("; ")}; run aborted`;
-          controller.abort();
           break;
         }
       } else if (message.type === "system" && (message as { subtype?: string }).subtype === "api_retry") {
@@ -106,18 +129,22 @@ export async function ask(profile: Profile, question: string, deps: AskDeps): Pr
       }
     }
   } catch (caught) {
-    if (!error) {
-      error = controller.signal.aborted
-        ? `timed out after ${Math.round(timeoutMs / 1000)} s`
-        : `the agent failed: ${caught instanceof Error ? caught.message : String(caught)}`;
+    if (!error && !result) {
+      if (controller.signal.aborted) timedOut = true;
+      else error = `the agent failed: ${caught instanceof Error ? caught.message : String(caught)}`;
     }
   } finally {
     clearTimeout(timer);
+    if (!finished) {
+      controller.abort();
+      void iterator?.return?.().catch(() => undefined);
+    }
   }
 
+  const timeoutMessage = `timed out after ${Math.round(timeoutMs / 1000)} s`;
   if (!error) {
     if (!result) {
-      error = controller.signal.aborted ? `timed out after ${Math.round(timeoutMs / 1000)} s` : "the agent ended without a result";
+      error = timedOut ? timeoutMessage : "the agent ended without a result";
     } else if (result.subtype !== "success") {
       error = `the agent stopped: ${result.subtype}${result.errors?.length ? ` (${result.errors.join("; ")})` : ""}`;
     } else if (result.is_error) {
@@ -131,8 +158,7 @@ export async function ask(profile: Profile, question: string, deps: AskDeps): Pr
   }
 
   const status = (result as { api_error_status?: number | null } | undefined)?.api_error_status;
-  const resultText = result && "result" in result ? String(result.result) : "";
-  const authFailure = error !== undefined && looksLikeAuthFailure(status, `${error} ${resultText}`, retryErrors);
+  const authFailure = error !== undefined && looksLikeAuthFailure(status, error, retryErrors);
   if (authFailure) error = `${error}\n${LOGIN_HINT}`;
 
   const costUsd = result?.total_cost_usd ?? 0;
@@ -141,7 +167,7 @@ export async function ask(profile: Profile, question: string, deps: AskDeps): Pr
     type: "summary",
     question,
     sessionId: sessionId ?? result?.session_id ?? null,
-    subtype: result?.subtype ?? (controller.signal.aborted ? "aborted" : null),
+    subtype: result?.subtype ?? (timedOut ? "aborted" : null),
     total_cost_usd: costUsd,
     duration_ms: durationMs,
     num_turns: result?.num_turns ?? null,

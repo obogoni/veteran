@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mkdirSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { boundaryHook, denialReason, type Denial } from "../src/agent/boundary.ts";
@@ -6,6 +7,7 @@ import { tempDir } from "./helpers.ts";
 
 const profileDir = tempDir("boundary-profile");
 const snapshot = join(profileDir, "snapshot");
+mkdirSync(join(snapshot, "src"), { recursive: true });
 const repoPath = join(profileDir, "repo");
 const otherDrive = process.platform === "win32" ? (snapshot.toUpperCase().startsWith("C:") ? "D:\\data\\x.txt" : "C:\\Windows\\win.ini") : "/etc/passwd";
 
@@ -28,6 +30,13 @@ const denied: [string, Record<string, unknown>][] = [
   ["Write", { file_path: "src/app.ts", content: "" }],
   ["WebFetch", { url: "https://example.com" }],
   ["Task", { prompt: "read ../repo" }],
+  ["Glob", { pattern: "**/../x" }],
+  ["Glob", { pattern: "src/**/../../x" }],
+  ["Read", { file_path: "src\\..\\..\\profile.yaml" }],
+  ["Read", { file_path: "%USERPROFILE%\\x.txt" }],
+  ["Read", { file_path: "$HOME/x.txt" }],
+  ["Glob", { pattern: "${HOME}/**" }],
+  ["Read", { file_path: "\\\\server\\share\\x.txt" }],
 ];
 
 const allowed: [string, Record<string, unknown>][] = [
@@ -39,6 +48,7 @@ const allowed: [string, Record<string, unknown>][] = [
   ["Grep", { pattern: "deactivate", glob: "**/*.ts" }],
   ["Grep", { pattern: "x" }],
   ["StructuredOutput", { answer: "../../etc" }],
+  ["Read", { file_path: join(realpathSync.native(snapshot), "src", "app.ts") }],
 ];
 
 test("C8 the hook denies every target outside the snapshot and every other tool", async () => {

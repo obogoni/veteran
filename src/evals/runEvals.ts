@@ -30,14 +30,12 @@ export function nearestRank(values: number[], percentile: number): number | unde
   return sorted[rank - 1];
 }
 
-export function formatCaseLine(evalCase: EvalCase, outcome: CaseOutcome): string {
+export function formatCaseLine(outcome: CaseOutcome): string {
   const money = `$${outcome.costUsd.toFixed(4)}`;
   const seconds = `${(outcome.durationMs / 1000).toFixed(1)}s`;
   if (!outcome.verdict) return `${outcome.id}  FAILED: ${outcome.failure}  ${money}  ${seconds}`;
-  const items = RUBRIC_ITEMS.map((name) => {
-    if (name === "byBranch" && !evalCase.expectedBranches) return `${name}=n/a`;
-    return `${name}=${outcome.verdict![name].pass ? "pass" : "fail"}`;
-  });
+  // Every item prints pass/fail (criterion 17); `byBranch` only decides accuracy when the case has expected branches.
+  const items = RUBRIC_ITEMS.map((name) => `${name}=${outcome.verdict![name].pass ? "pass" : "fail"}`);
   return `${outcome.id}  ${items.join(" ")}  ${money}  ${seconds}  ${outcome.accurate ? "ACCURATE" : "NOT ACCURATE"}`;
 }
 
@@ -67,7 +65,7 @@ export async function runEvals(profile: Profile, deps: AskDeps, writeLine: (line
     }
     const outcome = await runCase(profile, evalCase, rubric, deps);
     outcomes.push(outcome);
-    writeLine(formatCaseLine(evalCase, outcome));
+    writeLine(formatCaseLine(outcome));
   }
   const summary = { outcomes, skipped };
   writeLine(formatSummary(summary));

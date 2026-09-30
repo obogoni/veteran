@@ -1,4 +1,5 @@
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
+import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
 /** Tools the agent may call. `StructuredOutput` is added by the SDK whenever `outputFormat` is set. */
@@ -28,21 +29,37 @@ export function targetsOf(tool: string, input: unknown): string[] {
 }
 
 /**
- * Whether `target` stays inside `root`. A glob pattern counts as a path: every `..` segment,
- * absolute form, drive letter, UNC prefix or `~` expansion that would leave `root` is outside.
+ * Whether `target` stays inside `root`. A glob pattern counts as a path. Denied outright: any `..`
+ * segment (a glob double star can match zero folders, so "any-depth then .." climbs out), `~`, and environment
+ * expansions (`%VAR%`, `$VAR`, `${VAR}`). Otherwise the target must resolve under `root`, in its
+ * given or its real form (so a Windows 8.3 short name and its long form both count).
  */
 export function isInside(root: string, target: string): boolean {
   const trimmed = target.trim();
   if (trimmed === "") return true;
   if (trimmed.startsWith("~")) return false;
+  if (/%[^%\\/]+%|\$[A-Za-z_{(]/.test(trimmed)) return false;
+  if (trimmed.split(/[\\/{},]/).some((segment) => segment.trim() === "..")) return false;
   // Brace alternatives and comma lists can hide an escaping member: check each one.
   const members = trimmed.split(/[{},]/).filter((part) => part.trim() !== "");
   if (members.length > 1 && !members.every((part) => isInside(root, part))) return false;
-  return contains(root, resolve(root, trimmed));
+  const roots = rootForms(root);
+  const path = resolve(root, trimmed);
+  return roots.some((form) => contains(form, path));
+}
+
+function rootForms(root: string): string[] {
+  const forms = [resolve(root)];
+  try {
+    forms.push(realpathSync.native(forms[0]!));
+  } catch {
+    // A root that does not exist has only its resolved form.
+  }
+  return forms;
 }
 
 function contains(root: string, path: string): boolean {
-  const rel = relative(resolve(root), path);
+  const rel = relative(root, path);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 

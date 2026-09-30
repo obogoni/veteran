@@ -73,7 +73,7 @@ test("C17 one line per case with the five items, cost and seconds, then accuracy
   assert.deepEqual(result.stdout.trimEnd().split("\n"), [
     "a  correct=pass businessLevel=pass byBranch=pass admitsUncertainty=pass noLeak=pass  $0.1100  4.2s  ACCURATE",
     "b  correct=pass businessLevel=pass byBranch=fail admitsUncertainty=pass noLeak=pass  $0.1100  4.2s  NOT ACCURATE",
-    "c  correct=pass businessLevel=fail byBranch=n/a admitsUncertainty=pass noLeak=pass  $0.1100  4.2s  ACCURATE",
+    "c  correct=pass businessLevel=fail byBranch=fail admitsUncertainty=pass noLeak=pass  $0.1100  4.2s  ACCURATE",
     "accuracy 2/3 (67%) · cost $0.3300 · p50 4.2s · p95 4.2s · 0 adversarial skipped",
   ]);
 });
@@ -104,6 +104,18 @@ test("C18 a failed ask counts as not accurate, says why, and the next case still
   assert.equal(lines[0], "a  FAILED: the agent stopped: error_max_turns  $0.5000  9.0s");
   assert.match(lines[1]!, /^b  correct=pass .* ACCURATE$/);
   assert.match(lines[2]!, /^accuracy 1\/2 \(50%\)/);
+});
+
+test("C18 a timed-out ask and an off-schema answer also count as not accurate without stopping the run", async () => {
+  const dir = evalProfile([realCase("a"), realCase("b"), realCase("c")]);
+  const fake = fakeQuery({ hang: true }, { answer: { answer: "só texto" } }, ...agentThenJudge(verdict()));
+  const result = await run(["eval"], dir, fake.query, { timeoutMs: 500 });
+  assert.equal(result.code, 0, result.stderr);
+  const lines = result.stdout.trimEnd().split("\n");
+  assert.match(lines[0]!, /^a  FAILED: timed out after 1 s  \$0\.0000  \d+\.\ds$/);
+  assert.match(lines[1]!, /^b  FAILED: the answer did not match the expected schema/);
+  assert.match(lines[2]!, /^c  correct=pass .* ACCURATE$/);
+  assert.match(lines[3]!, /^accuracy 1\/3 \(33%\)/);
 });
 
 test("C19 bad JSON, format errors, duplicate ids and a missing rubric are all reported in one run; no agent starts", async () => {
