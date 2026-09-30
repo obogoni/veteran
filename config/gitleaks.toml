@@ -1,0 +1,4 @@
+# Veteran's gitleaks configuration. Passed with --config on every scan so that
+# no .gitleaks.toml from the scanned codebase is ever loaded.
+[extend]
+useDefault = true
