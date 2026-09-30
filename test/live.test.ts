@@ -136,8 +136,9 @@ test("C10 live: CLAUDE.md, AGENTS.md and .claude/settings.json in the snapshot a
   assert.deepEqual(init.plugins, []);
 });
 
-test("C21 live: veteran eval on the example profile exits 0 over every real case", { skip, timeout: 1_800_000 }, () => {
+test("C21 live: veteran eval on the example profile exits 0 over every real case", { skip, timeout: 1_800_000 }, (t) => {
   const run = veteran(EXAMPLE, ["eval"], 1_800_000);
+  for (const line of run.stdout.trimEnd().split("\n")) t.diagnostic(line);
   assert.equal(run.status, 0, run.stderr);
   const lines = run.stdout.trimEnd().split("\n");
   assert.equal(lines.length, 7, run.stdout);

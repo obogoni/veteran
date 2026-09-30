@@ -12,7 +12,7 @@ When this ships, an operator runs `veteran ask "<question>"` against a profile a
 
 The agent runs on the operator's Claude Code login under the company's Enterprise plan, never on an API key (author, 2026-09-30: "não podemos usar credencial de API").
 
-23 criteria in 6 slices · 7 one-way doors · 7 open, of which 0 block
+23 criteria in 6 slices · 7 one-way doors · 8 open, of which 0 block
 
 ## Criteria
 
@@ -148,3 +148,4 @@ This task is the record of decision. If a linked document diverges, ask before b
 | 5 | open | What does `veteran eval` leave when it is interrupted mid-run? | The transcripts of finished cases stay, and no partial summary is printed |
 | 6 | open | What is the `effort` for the agent and the judge? | Left at the SDK default (`medium` on Opus 5.5) and recorded in the transcript's `init` line. The eval decides whether to raise it |
 | 7 | open | How many example eval cases, and which questions? | At least 5 real cases over Playground's three business areas in `overview.md`. Content is chosen while building, since it is public and reversible |
+| 8 | open | Found while building: Claude Code injects the logged-in user's email into the model's context even under `settingSources: []` and a custom system prompt (a live probe greeted the operator by name). Should block 4 add the operator's name and email to the deterministic deny list, or is there a way to suppress the context? | Nothing blocks it now. The system prompt forbids personal data, and the rubric's `noLeak` item fails an answer that carries it |
