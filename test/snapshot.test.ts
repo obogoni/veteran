@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { loadProfile } from "../src/profile/loadProfile.ts";
-import { buildSnapshot, copyTree } from "../src/snapshot/buildSnapshot.ts";
+import { buildSnapshot, copyTree, replaceSnapshot } from "../src/snapshot/buildSnapshot.ts";
 import {
   commitFiles,
   commitRawEntry,
   exists,
+  fakeSecret,
   filesOf,
   git,
   makeProfile,
@@ -42,6 +44,12 @@ test("C8 a repoPath that is not a repository root exits non-zero naming it", () 
     assert.ok(result.stderr.includes(`repoPath is not a git repository: ${repoPath}`), result.stderr);
     assert.equal(exists(join(dir, "snapshot")), false);
   }
+  const dir = makeProfile(outer);
+  assert.equal(runCli(dir).status, 0);
+  const before = readTree(join(dir, "snapshot"));
+  writeFileSync(join(dir, "profile.yaml"), readProfile(dir).replace(`repoPath: ${outer}`, `repoPath: ${inner}`));
+  assert.notEqual(runCli(dir).status, 0);
+  assert.deepEqual(readTree(join(dir, "snapshot")), before);
 });
 
 test("C9 an unresolvable ref exits non-zero naming it, snapshot unchanged", () => {
@@ -99,6 +107,7 @@ test("C13 the snapshot applies the excludePaths dialect", () => {
 test("C14 no .git entry at any depth and no submodule gitlink is written", () => {
   const repo = makeRepo({ "a.txt": "a", "lib/b.txt": "b" });
   commitRawEntry(repo, "160000", "vendor/sub", "", "add submodule gitlink");
+  commitCraftedGitDirs(repo);
   const dir = makeProfile(repo);
   const result = runCli(dir);
   assert.equal(result.status, 0, result.stderr);
@@ -148,6 +157,16 @@ test("C17 repoPath is left as found after a successful and a failed run", () => 
   writeFileSync(join(dir, "profile.yaml"), readProfile(dir).replace("ref: main", "ref: missing"));
   assert.notEqual(runCli(dir).status, 0);
   assert.deepEqual(repoState(repo), before);
+
+  // A failure after the copy has started: the tree at the new ref holds a secret.
+  commitFiles(repo, { "leak.txt": `token = "${fakeSecret()}"\n` }, "leak");
+  writeFileSync(join(repo, "a.txt"), "dirty");
+  const beforeLeak = repoState(repo);
+  writeFileSync(join(dir, "profile.yaml"), readProfile(dir).replace("ref: missing", "ref: work"));
+  const leaked = runCli(dir);
+  assert.notEqual(leaked.status, 0);
+  assert.match(leaked.stderr, /gitleaks found/);
+  assert.deepEqual(repoState(repo), beforeLeak);
 });
 
 test("C26 a failure at copy, scan or replace leaves no .snapshot-* entry and the snapshot unchanged", async () => {
@@ -167,9 +186,15 @@ test("C26 a failure at copy, scan or replace leaves no .snapshot-* entry and the
     },
     scan: { scan: async () => Promise.reject(new Error("scan failed")) },
     replace: { replace: async () => Promise.reject(new Error("replace failed")) },
+    // Fails on the second rename, after the previous snapshot has already been moved aside.
+    "replace after moving": {
+      replace: async (tree: string, snapshot: string) => {
+        await replaceSnapshot(join(tree, "does-not-exist"), snapshot);
+      },
+    },
   };
   for (const [step, steps] of Object.entries(failures)) {
-    await assert.rejects(buildSnapshot(profile, { steps }), new RegExp(`${step} failed`));
+    await assert.rejects(buildSnapshot(profile, { steps }), step === "replace after moving" ? /ENOENT/ : new RegExp(`${step} failed`));
     assert.deepEqual(readdirSync(dir).filter((name) => name.startsWith(".snapshot-")), [], step);
     assert.deepEqual(readTree(join(dir, "snapshot")), before, step);
   }
@@ -183,6 +208,24 @@ test("C27 a successful run prints one summary line with the SHA and the counts",
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, `snapshot ${sha}: 2 files copied, 1 excluded, 1 symlinks omitted, 0 submodules omitted\n`);
 });
+
+/** Commits a tree holding `.git/config` and `lib/.git/hooks/x` - git mktree accepts what `git add` never would. */
+function commitCraftedGitDirs(repo: string): void {
+  const run = (args: string[], input: string) => execFileSync("git", ["-C", repo, ...args], { input, encoding: "utf8" }).trim();
+  const mktree = (entries: string[]) => run(["mktree"], `${entries.join("\n")}\n`);
+  const blob = run(["hash-object", "-w", "--stdin"], "[core]\n");
+  const hooks = mktree([`100644 blob ${blob}\tx`]);
+  const nestedGit = mktree([`040000 tree ${hooks}\thooks`]);
+  const lib = mktree([...git(repo, "ls-tree", "HEAD:lib").split("\n"), `040000 tree ${nestedGit}\t.git`]);
+  const topGit = mktree([`100644 blob ${blob}\tconfig`]);
+  const root = mktree([
+    ...git(repo, "ls-tree", "HEAD").split("\n").filter((line) => !line.endsWith("\tlib")),
+    `040000 tree ${lib}\tlib`,
+    `040000 tree ${topGit}\t.git`,
+  ]);
+  const commit = git(repo, "commit-tree", root, "-p", "HEAD", "-m", "crafted .git entries");
+  git(repo, "update-ref", "refs/heads/main", commit);
+}
 
 function readProfile(dir: string): string {
   return readTree(dir).get("profile.yaml")!.toString();

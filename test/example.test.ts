@@ -11,13 +11,14 @@ const EXAMPLE = join(ROOT, "profiles", "example");
 test("C28 the example profile snapshots Playground at the pinned ref without .specs", () => {
   const readme = readFileSync(join(EXAMPLE, "README.md"), "utf8");
   const clone = /git clone (\S+) profiles\/example\/repo/.exec(readme);
-  assert.ok(clone, "README gives the clone command");
+  assert.equal(clone?.[1], "https://github.com/obogoni/playground");
 
   const dir = join(tempDir("example"), "example");
-  cpSync(EXAMPLE, dir, { recursive: true, filter: (source) => !/[\/](repo|snapshot)$/.test(source) });
+  cpSync(EXAMPLE, dir, { recursive: true, filter: (source) => !/[\\/](repo|snapshot)$/.test(source) });
   execFileSync("git", ["clone", "-q", "--filter=blob:none", clone[1]!, join(dir, "repo")]);
 
   const profile = parse(readFileSync(join(dir, "profile.yaml"), "utf8")) as { ref: string; excludePaths: string[] };
+  assert.equal(profile.ref, "60ff14809dc31c700f9f987add96aae48f72cb97");
   assert.ok(profile.excludePaths.includes(".specs"));
   assert.notEqual(git(join(dir, "repo"), "ls-tree", "--name-only", profile.ref, ".specs"), "");
 
@@ -38,6 +39,9 @@ test("C29 git ignores real profiles and generated folders, but not the example's
   };
   for (const path of [
     "profiles/acme/profile.yaml",
+    "profiles/example/snapshot/",
+    "profiles/example/transcripts/",
+    "profiles/example/repo/",
     "profiles/example/snapshot/a.txt",
     "profiles/example/transcripts/a.jsonl",
     "profiles/example/repo/README.md",

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { loadProfile } from "../src/profile/loadProfile.ts";
 import { buildSnapshot } from "../src/snapshot/buildSnapshot.ts";
 import { exists, fakeSecret, makeProfile, makeRepo, pathWithoutGitleaks, readTree, runCli, tempDir } from "./helpers.ts";
+
+/** The printed finding, with the path exactly repo-relative. */
+const FINDING_LINE = /^  - src\/settings\.ts:1 \(rule github-pat\)$/m;
 
 function leakyRepo(extra: Record<string, string> = {}) {
   const secret = fakeSecret();
@@ -26,7 +29,7 @@ test("C18 a secret in a non-excluded file aborts with its path and rule, value r
   const { repo, secret } = leakyRepo();
   const result = runCli(makeProfile(repo));
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /src\/settings\.ts:1 \(rule github-pat\)/);
+  assert.match(result.stderr, FINDING_LINE);
   assert.ok(!result.stderr.includes(secret) && !result.stdout.includes(secret));
 });
 
@@ -53,7 +56,7 @@ test("C21 a .gitleaks.toml in the tree cannot allowlist the secret", () => {
   });
   const result = runCli(makeProfile(repo));
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /src\/settings\.ts:1 \(rule github-pat\)/);
+  assert.match(result.stderr, FINDING_LINE);
 });
 
 test("C22 a root .gitleaksignore in the tree cannot ignore the finding", () => {
@@ -63,7 +66,7 @@ test("C22 a root .gitleaksignore in the tree cannot ignore the finding", () => {
   const { repo } = leakyRepo({ ".gitleaksignore": `${fingerprints}\n` });
   const result = runCli(makeProfile(repo));
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /src\/settings\.ts:1 \(rule github-pat\)/);
+  assert.match(result.stderr, FINDING_LINE);
 });
 
 test("C23 a gitleaks:allow comment cannot silence the finding", () => {
@@ -71,7 +74,7 @@ test("C23 a gitleaks:allow comment cannot silence the finding", () => {
   const repo = makeRepo({ "src/settings.ts": `export const token = "${secret}"; // gitleaks:allow\n` });
   const result = runCli(makeProfile(repo));
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /src\/settings\.ts:1 \(rule github-pat\)/);
+  assert.match(result.stderr, FINDING_LINE);
 });
 
 test("C24 without gitleaks on PATH the run aborts and the snapshot is unchanged", () => {
@@ -81,6 +84,19 @@ test("C24 without gitleaks on PATH the run aborts and the snapshot is unchanged"
   const result = runCli(dir, { env: { PATH: path, Path: path } });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /secret scan did not complete \(gitleaks not found on PATH\)/);
+  assert.deepEqual(readTree(join(dir, "snapshot")), before);
+});
+
+test("C25 a gitleaks that exits with an error makes veteran snapshot exit non-zero, snapshot unchanged", () => {
+  const repo = makeRepo({ "a.txt": "a" });
+  const { dir, before } = profileWithPreviousSnapshot(repo);
+  // A copy of node standing in for gitleaks: `node dir <path> ...` fails with exit 1.
+  const bin = tempDir("broken-gitleaks");
+  copyFileSync(process.execPath, join(bin, process.platform === "win32" ? "gitleaks.exe" : "gitleaks"));
+  const path = `${bin}${delimiter}${pathWithoutGitleaks()}`;
+  const result = runCli(dir, { env: { PATH: path, Path: path } });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /secret scan did not complete \(gitleaks exited 1/);
   assert.deepEqual(readTree(join(dir, "snapshot")), before);
 });
 

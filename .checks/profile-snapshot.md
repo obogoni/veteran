@@ -27,7 +27,7 @@ Greenfield: `package.json`, `src/profile/loadProfile.ts`, `src/snapshot/{glob,gi
 | Profile contract (task) | `profile.yaml`: `name`, `repoPath`, `ref`, `language`, `versionCaveat` strings; `instructions`, `excludePaths`, `denyTerms` string lists; YAML parsed with the `yaml` package | one profile per codebase in the repo - public repo |
 | `excludePaths` dialect (task) | only `*` (not crossing `/`) and `**` (crossing) are wildcards; every other character, including `?`, `[`, `{`, matches literally; case-sensitive; a match on any ancestor directory excludes the path; `!` prefix rejected | picomatch/minimatch - brings braces, extglobs and character classes the chosen dialect never promised, so a pattern would silently mean more than its author read |
 | Snapshot read from git objects, not a checkout or archive | `git rev-parse --verify --end-of-options <ref>^{commit}`, `git ls-tree -r -z --full-tree <sha>`, `git cat-file --batch`; mode `120000` (symlink) and `160000` (submodule) never written | `git archive` - honours the target's `export-subst`/`export-ignore` attributes, so content would stop being byte-identical to the blob; a checkout mutates `repoPath` |
-| Scan root isolated from the tree | staging is `<profile>/.snapshot-staging-<random>/` holding `tree/` (the future snapshot) and `canary.txt`; gitleaks scans the staging root, so the target's root `.gitleaksignore` sits at `tree/.gitleaksignore`, where gitleaks does not read it; on success `tree/` is renamed to `snapshot/` | scanning `tree/` with `-i <empty dir>` - probe showed gitleaks still honours `<scan root>/.gitleaksignore` |
+| Scan root isolated from the tree | staging is `<profile>/.snapshot-staging-<random>/` holding `scan/tree/` (the future snapshot), `scan/canary.txt`, `ignore/` and `report.json`; gitleaks scans `scan/`, so the target's root `.gitleaksignore` sits at `scan/tree/.gitleaksignore`, where gitleaks does not read it; on success `scan/tree/` is renamed to `snapshot/` | scanning `tree/` with `-i <empty dir>` - probe showed gitleaks still honours `<scan root>/.gitleaksignore` |
 | Canary proves the scan ran | a random GitHub-PAT-shaped token generated per run in `canary.txt`; the scan counts only if gitleaks exits with `--exit-code 42` and the JSON report lists the canary; any other finding aborts | trusting exit `0` - probe showed gitleaks exits `0` with "no leaks found" when it cannot read its target |
 | gitleaks invocation (task) | `gitleaks dir <staging> --config config/gitleaks.toml --gitleaks-ignore-path <scan dir>/ignore --ignore-gitleaks-allow --redact --no-banner --no-color --exit-code 42 --report-format json --report-path <scan dir>/report.json`, `GITLEAKS_CONFIG*` removed from the child env | default invocation - task Decided |
 | Replace on success only (task) | rename `snapshot/` → `.snapshot-old-<random>`, `tree/` → `snapshot/`, delete old; on failure delete staging, restore old if moved | delete old on abort - task Decided |
@@ -76,7 +76,7 @@ Proof: `node --test --test-name-pattern="^C11 " test/snapshot.test.ts`
 **C12** - The glob dialect decides the task's four examples plus the literal-character rule: `config` and `config/**` exclude `config/app/secrets.json`; `*.pem` excludes `key.pem`, not `certs/key.pem`; `**/*.pem` excludes both; `Config/**` does not exclude `config/a.txt`; `a?.txt` does not exclude `ab.txt`
 Proof: `node --test --test-name-pattern="^C12 " test/glob.test.ts`
 
-**C13** - The glob dialect is applied by the snapshot itself: a repo with those paths yields a snapshot missing exactly the excluded ones
+**C13** - The glob dialect is applied by the snapshot itself: with one pattern of each shape - bare directory `config`, root-only `*.pem`, mid-path `deep/**/*.pem`, literal `a?.txt`, case-sensitive `docs/**` - the snapshot misses exactly the matching paths
 Proof: `node --test --test-name-pattern="^C13 " test/snapshot.test.ts`
 
 **C14** - `snapshot/` contains no `.git` entry at any depth, and a submodule gitlink is not written
@@ -105,7 +105,7 @@ Proof: `node --test --test-name-pattern="^C20 " test/scan.test.ts`
 **C21** - A `.gitleaks.toml` in the tree that allowlists the secret's path does not stop the abort
 Proof: `node --test --test-name-pattern="^C21 " test/scan.test.ts`
 
-**C22** - A root `.gitleaksignore` in the tree listing the secret's fingerprint in every plausible form does not stop the abort
+**C22** - A root `.gitleaksignore` in the tree listing the secret's fingerprint as `src/…`, `tree/src/…` and `scan/tree/src/…` does not stop the abort (the absolute staging path is random per run, so it cannot be listed in advance)
 Proof: `node --test --test-name-pattern="^C22 " test/scan.test.ts`
 
 **C23** - A `gitleaks:allow` comment on the secret's line does not stop the abort
@@ -114,7 +114,7 @@ Proof: `node --test --test-name-pattern="^C23 " test/scan.test.ts`
 **C24** - With `gitleaks` absent from `PATH`, the run exits non-zero, stderr says the scan did not complete, `snapshot/` unchanged
 Proof: `node --test --test-name-pattern="^C24 " test/scan.test.ts`
 
-**C25** - A scanner that exits with an error, or exits `0` without reporting the canary, aborts with "scan did not complete", `snapshot/` unchanged
+**C25** - A scanner that exits with an error makes `veteran snapshot` exit non-zero, and one that exits `0` or `42` without reporting the canary makes `buildSnapshot` reject; both say "scan did not complete", `snapshot/` unchanged
 Proof: `node --test --test-name-pattern="^C25 " test/scan.test.ts`
 
 **C26** - A failure at each step after the copy begins - copy, scan, replace - leaves no `.snapshot-*` entry under `VETERAN_PROFILE_DIR` and `snapshot/` unchanged
@@ -160,7 +160,7 @@ S1-S4 ≈ 22k by file size, all new code in one package - one batch, no handoff.
 | tree entry modes (4) | blob C11 · executable blob C11 · symlink C15 · gitlink C14 | - |
 | gitleaks bypasses (3) | `.gitleaks.toml` C21 · `.gitleaksignore` C22 · `gitleaks:allow` C23 | - |
 | scan outcomes (4) | finding C18 · clean C20 · missing binary C24 · error / silent exit C25 | - |
-| failing steps (3) | copy C26 · scan C26 · replace C26 | - |
+| failing steps (4) | copy C26 · scan C26 · replace before moving C26 · replace after moving the old snapshot C26 | - |
 
-- Claims naming an exit status or printed output: C1-C4, C7-C10, C18, C20, C24, C25, C27, C28 - each proof runs the `veteran` CLI as a child process except C26, which injects step failures into `buildSnapshot` because a real copy or rename failure cannot be forced portably
+- Claims naming an exit status or printed output: C1-C4, C7-C10, C18, C20, C24, C25, C27, C28 - each proof runs the `veteran` CLI as a child process, except C26 and the silent-scanner half of C25, which inject into `buildSnapshot` because a real copy or rename failure, or a gitleaks that exits `0` without scanning, cannot be forced portably through the CLI
 - No other check claims more than the single case its proof exercises
