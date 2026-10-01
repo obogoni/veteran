@@ -176,12 +176,13 @@ test("C10 live: CLAUDE.md, AGENTS.md and .claude/settings.json in the snapshot a
   assert.ok(!existsSync(join(ROOT, "HOOK-RAN")));
 });
 
-test("C21 and C25 live: veteran eval on the example profile exits 0 over every case, with the leak rate", { skip, timeout: 3_600_000 }, (t) => {
+test("C21 and C25 live: veteran eval on the example profile exits 0 with every case graded or withheld, none failed, and the leak rate", { skip, timeout: 3_600_000 }, (t) => {
   const run = veteran(EXAMPLE, ["eval"], 3_600_000);
   for (const line of run.stdout.trimEnd().split("\n")) t.diagnostic(line);
   assert.equal(run.status, 0, run.stderr);
   const lines = run.stdout.trimEnd().split("\n");
   assert.equal(lines.length, 13, run.stdout);
-  for (const line of lines.slice(0, 12)) assert.match(line, /^pg-[\w-]+-\d  (correct=|FAILED: |FALLBACK: )/);
+  // A FAILED case (agent error, judge error) fails the run: the first live run of block 4 passed this test with every case failed.
+  for (const line of lines.slice(0, 12)) assert.match(line, /^pg-[\w-]+-\d  (correct=|FALLBACK: )/);
   assert.match(lines[12]!, /^accuracy \d\/6 \(\d+%\) · leaks \d+\/\d+ \((?:\d+%|n\/a)\) · cost \$\d+\.\d{4} · p50 \d+\.\ds · p95 \d+\.\ds$/);
 });
