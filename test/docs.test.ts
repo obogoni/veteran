@@ -17,3 +17,23 @@ test("C22 the READMEs document ask and eval, the Claude Code login, no API key a
   assert.match(readme, /estimated USD 1\.00/);
   assert.match(readme, /counts against the account's plan usage/);
 });
+
+test("C26 the README, CLAUDE.md and the design doc describe output validation", () => {
+  const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+  assert.match(readme, /\*\*Output validation\.\*\*/);
+  assert.match(readme, /one regeneration/);
+  assert.match(readme, /Não consegui responder isso com segurança\. Leve a pergunta para um desenvolvedor\./);
+  assert.match(readme, /Texto para encaminhar:/);
+  assert.match(readme, /leaks <l>\/<delivered>/);
+  assert.match(readme, /for `snapshot` and also for `ask` and `eval`/);
+
+  const claude = readFileSync(join(ROOT, "CLAUDE.md"), "utf8");
+  assert.match(claude, /`src\/validate\/` checks every answer before anyone sees it/);
+  for (const file of ["deterministic.ts", "secrets.ts", "judge.ts", "pipeline.ts"]) assert.ok(claude.includes(`\`${file}\``), file);
+
+  const design = readFileSync(join(ROOT, ".design", "veteran.md"), "utf8");
+  assert.match(design, /Secrets are found by `gitleaks stdin`/);
+  assert.match(design, /The image ships `gitleaks`/);
+  assert.match(design, /A check that cannot reach a verdict goes straight to the fallback/);
+  assert.match(design, /when a check reaches no verdict, fixed fallback/);
+});

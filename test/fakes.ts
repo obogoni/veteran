@@ -3,8 +3,15 @@ import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { VeteranAnswer } from "../src/agent/answerSchema.ts";
 import type { QueryFn } from "../src/agent/sdk.ts";
+import type { Scanner } from "../src/snapshot/scan.ts";
 import { runCommand } from "../src/commands.ts";
-import { makeProfile, tempDir } from "./helpers.ts";
+import { makeProfile, ROOT, tempDir } from "./helpers.ts";
+
+/** A gitleaks stand-in that reports only the canary (see `stubGitleaks.ts`). */
+export const STUB_SCANNER: Scanner = { command: process.execPath, prefixArgs: [join(ROOT, "test", "stubGitleaks.ts")] };
+
+/** The validation judge's default verdict in fakes: nothing revealed, at no cost. */
+export const JUDGE_PASS: FakeScenario = { answer: { revealsImplementation: false, reason: "only business terms" }, result: { total_cost_usd: 0, duration_ms: 0 } };
 
 export const ANSWER: VeteranAnswer = {
   answer: "Depende do tipo do cartão.",
@@ -47,14 +54,47 @@ export interface FakeScenario {
 }
 
 /** A stand-in for the SDK's `query()` that records each call and yields a scripted session. */
-export function fakeQuery(...scenarios: FakeScenario[]): { query: QueryFn; calls: FakeCall[]; active: () => number; maxActive: () => number } {
+export interface Fake {
+  query: QueryFn;
+  /** Agent and rubric-judge calls, in order. Validation-judge calls are kept apart in `judgeCalls`. */
+  calls: FakeCall[];
+  judgeCalls: FakeCall[];
+  /** Every call, in order. */
+  allCalls: FakeCall[];
+  /** Scripts the validation judge's sessions in order; the last one repeats. Default: `JUDGE_PASS`. */
+  judge: (...scenarios: FakeScenario[]) => Fake;
+  active: () => number;
+  maxActive: () => number;
+}
+
+function isValidationJudge(options: Options): boolean {
+  const schema = (options.outputFormat as { schema?: { properties?: Record<string, unknown> } } | undefined)?.schema;
+  return !!schema?.properties && "revealsImplementation" in schema.properties;
+}
+
+/**
+ * A stand-in for the SDK's `query()` that records each call and yields a scripted session. Agent and
+ * rubric-judge calls take `scenarios` in order; validation-judge calls take the `judge` scenarios.
+ */
+export function fakeQuery(...scenarios: FakeScenario[]): Fake {
   const calls: FakeCall[] = [];
+  const judgeCalls: FakeCall[] = [];
+  const allCalls: FakeCall[] = [];
+  let judgeScenarios: FakeScenario[] = [JUDGE_PASS];
   let active = 0;
   let maxActive = 0;
   const query: QueryFn = (params) => {
-    const scenario = scenarios[Math.min(calls.length, scenarios.length - 1)] ?? {};
-    calls.push({ prompt: params.prompt, options: params.options ?? {} });
     const options = params.options ?? {};
+    const call = { prompt: params.prompt, options };
+    allCalls.push(call);
+    let scenario: FakeScenario;
+    if (isValidationJudge(options)) {
+      scenario = judgeScenarios[Math.min(judgeCalls.length, judgeScenarios.length - 1)] ?? JUDGE_PASS;
+      judgeCalls.push(call);
+    } else {
+      scenario = scenarios[Math.min(calls.length, scenarios.length - 1)] ?? {};
+      calls.push(call);
+    }
     return (async function* (): AsyncGenerator<SDKMessage> {
       active++;
       maxActive = Math.max(maxActive, active);
@@ -104,7 +144,19 @@ export function fakeQuery(...scenarios: FakeScenario[]): { query: QueryFn; calls
       }
     })();
   };
-  return { query, calls, active: () => active, maxActive: () => maxActive };
+  const fake: Fake = {
+    query,
+    calls,
+    judgeCalls,
+    allCalls,
+    judge: (...next) => {
+      judgeScenarios = next;
+      return fake;
+    },
+    active: () => active,
+    maxActive: () => maxActive,
+  };
+  return fake;
 }
 
 /** A valid profile whose `snapshot/` exists (or not). */
@@ -124,14 +176,19 @@ export interface CommandResult {
 }
 
 /** Runs the CLI in-process with a fake `query`. */
-export async function run(argv: string[], profileDir: string | undefined, query: QueryFn, extra: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): Promise<CommandResult> {
+export async function run(
+  argv: string[],
+  profileDir: string | undefined,
+  query: QueryFn,
+  extra: { env?: NodeJS.ProcessEnv; timeoutMs?: number; scanner?: Scanner } = {},
+): Promise<CommandResult> {
   let stdout = "";
   let stderr = "";
   const env: NodeJS.ProcessEnv = { ...extra.env };
   if (profileDir !== undefined) env.VETERAN_PROFILE_DIR = profileDir;
   let code: number;
   try {
-    code = await runCommand(argv, { env, stdout: (text) => (stdout += text), stderr: (text) => (stderr += text) }, { query, timeoutMs: extra.timeoutMs });
+    code = await runCommand(argv, { env, stdout: (text) => (stdout += text), stderr: (text) => (stderr += text) }, { query, timeoutMs: extra.timeoutMs, scanner: extra.scanner ?? STUB_SCANNER });
   } catch (error) {
     stderr += `veteran: ${(error as Error).message}\n`;
     code = 1;

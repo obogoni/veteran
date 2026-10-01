@@ -103,4 +103,51 @@ export function looksLikeAuthFailure(status: number | null | undefined, errorTex
   return /not logged in|please run \/login|authentication_failed|invalid (api key|credentials|bearer token)|oauth token/i.test(errorText);
 }
 
-export const LOGIN_HINT = "Claude Code must be logged in with the Enterprise account: run `claude`, then `/login`.";
+export interface Consumed {
+  /** The deadline fired before the stream ended or `onMessage` stopped it. */
+  timedOut: boolean;
+  /** The SDK threw; set only when neither the deadline nor `onMessage` ended the run first. */
+  thrown?: unknown;
+}
+
+/**
+ * Reads `messages` until `onMessage` returns `"stop"`, the stream ends, or `timeoutMs` passes. Every
+ * step races the deadline, so an SDK that ignores the abort still ends the read on time. Whenever the
+ * stream did not end on its own, the controller is aborted and the iterator closed without waiting.
+ */
+export async function consume(
+  messages: AsyncIterable<SDKMessage>,
+  controller: AbortController,
+  timeoutMs: number,
+  onMessage: (message: SDKMessage) => "stop" | void,
+): Promise<Consumed> {
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const deadline = new Promise<"deadline">((resolvePromise) => {
+    if (controller.signal.aborted) resolvePromise("deadline");
+    controller.signal.addEventListener("abort", () => resolvePromise("deadline"), { once: true });
+  });
+  let iterator: AsyncIterator<SDKMessage> | undefined;
+  let ended = false;
+  try {
+    iterator = messages[Symbol.asyncIterator]();
+    for (;;) {
+      const next = await Promise.race([iterator.next(), deadline]);
+      if (next === "deadline") return { timedOut: true };
+      if (next.done) {
+        ended = true;
+        return { timedOut: false };
+      }
+      if (onMessage(next.value) === "stop") return { timedOut: false };
+    }
+  } catch (error) {
+    return controller.signal.aborted ? { timedOut: true } : { timedOut: false, thrown: error };
+  } finally {
+    clearTimeout(timer);
+    if (!ended) {
+      controller.abort();
+      void iterator?.return?.().catch(() => undefined);
+    }
+  }
+}
+
+export const LOGIN_HINT ="Claude Code must be logged in with the Enterprise account: run `claude`, then `/login`.";

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { VeteranAnswer } from "../agent/answerSchema.ts";
 import { boundaryHook, STRUCTURED_OUTPUT_TOOL, type Denial } from "../agent/boundary.ts";
-import { hardenedOptions, initProblems, isInit, type QueryFn } from "../agent/sdk.ts";
+import { consume, hardenedOptions, initProblems, isInit, type QueryFn } from "../agent/sdk.ts";
 import type { EvalCase } from "./cases.ts";
 
 export const JUDGE_MODEL = "claude-sonnet-5-5";
@@ -65,42 +65,54 @@ export async function judgeAnswer(evalCase: EvalCase, answer: VeteranAnswer, rub
   const cwd = mkdtempSync(join(tmpdir(), "veteran-judge-"));
   const denials: Denial[] = [];
   let result: Extract<SDKMessage, { type: "result" }> | undefined;
+  let isolation: string | undefined;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? JUDGE_TIMEOUT_MS);
   try {
-    for await (const message of deps.query({
-      prompt: judgePrompt(evalCase, answer, rubric),
-      options: {
-        ...hardenedOptions(deps.env ?? process.env),
-        model: JUDGE_MODEL,
-        cwd,
-        tools: [],
-        systemPrompt: SYSTEM,
-        maxTurns: JUDGE_MAX_TURNS,
-        maxBudgetUsd: JUDGE_MAX_BUDGET_USD,
-        abortController: controller,
-        outputFormat: { type: "json_schema", schema: VERDICT_SCHEMA },
-        hooks: { PreToolUse: [{ hooks: [boundaryHook(cwd, denials, false)] }] },
+    const consumed = await consume(
+      deps.query({
+        prompt: judgePrompt(evalCase, answer, rubric),
+        options: {
+          ...hardenedOptions(deps.env ?? process.env),
+          model: JUDGE_MODEL,
+          cwd,
+          tools: [],
+          systemPrompt: SYSTEM,
+          maxTurns: JUDGE_MAX_TURNS,
+          maxBudgetUsd: JUDGE_MAX_BUDGET_USD,
+          abortController: controller,
+          outputFormat: { type: "json_schema", schema: VERDICT_SCHEMA },
+          hooks: { PreToolUse: [{ hooks: [boundaryHook(cwd, denials, false)] }] },
+        },
+      }),
+      controller,
+      deps.timeoutMs ?? JUDGE_TIMEOUT_MS,
+      (message) => {
+        if (isInit(message)) {
+          const problems = initProblems(message, { tools: [STRUCTURED_OUTPUT_TOOL], cwd, model: JUDGE_MODEL, permissionMode: "dontAsk" });
+          if (problems.length > 0) {
+            isolation = `judge session is not isolated: ${problems.join("; ")}`;
+            return "stop";
+          }
+        }
+        if (message.type === "result") {
+          result = message;
+          return "stop";
+        }
       },
-    })) {
-      if (isInit(message)) {
-        const problems = initProblems(message, { tools: [STRUCTURED_OUTPUT_TOOL], cwd, model: JUDGE_MODEL, permissionMode: "dontAsk" });
-        if (problems.length > 0) return { error: `judge session is not isolated: ${problems.join("; ")}`, costUsd: 0 };
-      }
-      if (message.type === "result") result = message;
+    );
+    const costUsd = result?.total_cost_usd ?? 0;
+    if (isolation) return { error: isolation, costUsd: 0 };
+    if (!result) {
+      if (consumed.timedOut) return { error: "judge failed: timed out", costUsd };
+      if (consumed.thrown !== undefined) return { error: `judge failed: ${consumed.thrown instanceof Error ? consumed.thrown.message : String(consumed.thrown)}`, costUsd };
+      return { error: "judge ended without a result", costUsd };
     }
-  } catch (error) {
-    const reason = controller.signal.aborted ? "timed out" : error instanceof Error ? error.message : String(error);
-    return { error: `judge failed: ${reason}`, costUsd: result?.total_cost_usd ?? 0 };
+    if (result.subtype !== "success" || result.is_error) return { error: `judge stopped: ${result.subtype}`, costUsd };
+    if (!isVerdict(result.structured_output)) return { error: "judge verdict did not match the schema", costUsd };
+    return { verdict: result.structured_output, costUsd };
   } finally {
-    clearTimeout(timer);
     rmSync(cwd, { recursive: true, force: true, maxRetries: 3 });
   }
-  const costUsd = result?.total_cost_usd ?? 0;
-  if (!result) return { error: "judge ended without a result", costUsd };
-  if (result.subtype !== "success" || result.is_error) return { error: `judge stopped: ${result.subtype}`, costUsd };
-  if (!isVerdict(result.structured_output)) return { error: "judge verdict did not match the schema", costUsd };
-  return { verdict: result.structured_output, costUsd };
 }
 
 function isVerdict(value: unknown): value is Verdict {

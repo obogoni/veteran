@@ -1,12 +1,19 @@
 import { ask, assertAskable, type AskDeps } from "../agent/ask.ts";
 import type { Profile } from "../profile/loadProfile.ts";
 import { loadEvalSet, type EvalCase } from "./cases.ts";
-import { judgeAnswer, RUBRIC_ITEMS, type Verdict } from "./rubricJudge.ts";
+import { judgeAnswer, JUDGE_TIMEOUT_MS, RUBRIC_ITEMS, type Verdict } from "./rubricJudge.ts";
 
 export interface CaseOutcome {
   id: string;
+  adversarial: boolean;
   accurate: boolean;
+  /** The case got an answer or the fallback; a failed run delivered nothing. */
+  delivered: boolean;
+  /** The delivered answer failed the rubric's `noLeak`. A fallback never leaks. */
+  leaked: boolean;
   verdict?: Verdict;
+  /** Stage and rule ids when the case ended in the fallback. */
+  fallback?: string;
   failure?: string;
   costUsd: number;
   durationMs: number;
@@ -14,7 +21,6 @@ export interface CaseOutcome {
 
 export interface EvalSummary {
   outcomes: CaseOutcome[];
-  skipped: number;
 }
 
 /** A case is accurate when `correct` passes and, for a case with expected branches, `byBranch` too. */
@@ -33,58 +39,76 @@ export function nearestRank(values: number[], percentile: number): number | unde
 export function formatCaseLine(outcome: CaseOutcome): string {
   const money = `$${outcome.costUsd.toFixed(4)}`;
   const seconds = `${(outcome.durationMs / 1000).toFixed(1)}s`;
+  if (outcome.fallback !== undefined) return `${outcome.id}  FALLBACK: ${outcome.fallback}  ${money}  ${seconds}`;
   if (!outcome.verdict) return `${outcome.id}  FAILED: ${outcome.failure}  ${money}  ${seconds}`;
-  // Every item prints pass/fail (criterion 17); `byBranch` only decides accuracy when the case has expected branches.
+  // Every item prints pass/fail (block 3 criterion 17); `byBranch` only decides accuracy when the case has expected branches.
   const items = RUBRIC_ITEMS.map((name) => `${name}=${outcome.verdict![name].pass ? "pass" : "fail"}`);
-  return `${outcome.id}  ${items.join(" ")}  ${money}  ${seconds}  ${outcome.accurate ? "ACCURATE" : "NOT ACCURATE"}`;
+  const tail = outcome.adversarial ? "ADVERSARIAL" : outcome.accurate ? "ACCURATE" : "NOT ACCURATE";
+  return `${outcome.id}  ${items.join(" ")}  ${money}  ${seconds}  ${tail}`;
 }
 
 export function formatSummary(summary: EvalSummary): string {
-  const total = summary.outcomes.length;
-  const passed = summary.outcomes.filter((outcome) => outcome.accurate).length;
-  const percent = total === 0 ? "n/a" : `${Math.round((passed / total) * 100)}%`;
+  const percent = (part: number, whole: number) => (whole === 0 ? "n/a" : `${Math.round((part / whole) * 100)}%`);
+  const real = summary.outcomes.filter((outcome) => !outcome.adversarial);
+  const accurate = real.filter((outcome) => outcome.accurate).length;
+  const delivered = summary.outcomes.filter((outcome) => outcome.delivered).length;
+  const leaks = summary.outcomes.filter((outcome) => outcome.leaked).length;
   const cost = summary.outcomes.reduce((sum, outcome) => sum + outcome.costUsd, 0);
   const durations = summary.outcomes.map((outcome) => outcome.durationMs);
   const seconds = (ms: number | undefined) => (ms === undefined ? "n/a" : `${(ms / 1000).toFixed(1)}s`);
-  return `accuracy ${passed}/${total} (${percent}) · cost $${cost.toFixed(4)} · p50 ${seconds(nearestRank(durations, 50))} · p95 ${seconds(nearestRank(durations, 95))} · ${summary.skipped} adversarial skipped`;
+  return [
+    `accuracy ${accurate}/${real.length} (${percent(accurate, real.length)})`,
+    `leaks ${leaks}/${delivered} (${percent(leaks, delivered)})`,
+    `cost $${cost.toFixed(4)}`,
+    `p50 ${seconds(nearestRank(durations, 50))}`,
+    `p95 ${seconds(nearestRank(durations, 95))}`,
+  ].join(" · ");
 }
 
 /**
- * Runs every real case through `ask`, one at a time, and grades each answer with the rubric judge.
- * Adversarial cases are counted and skipped (leak scoring is block 4). A failing case never stops the run.
+ * Runs every case, real and adversarial, through `ask` (validation included), one at a time, and
+ * grades each delivered answer with the rubric judge. A failing case never stops the run.
  */
 export async function runEvals(profile: Profile, deps: AskDeps, writeLine: (line: string) => void): Promise<EvalSummary> {
   const { cases, rubric } = loadEvalSet(profile.dir);
   assertAskable(profile);
   const outcomes: CaseOutcome[] = [];
-  let skipped = 0;
   for (const evalCase of cases) {
-    if (evalCase.adversarial) {
-      skipped++;
-      continue;
-    }
     const outcome = await runCase(profile, evalCase, rubric, deps);
     outcomes.push(outcome);
     writeLine(formatCaseLine(outcome));
   }
-  const summary = { outcomes, skipped };
+  const summary = { outcomes };
   writeLine(formatSummary(summary));
   return summary;
 }
 
 async function runCase(profile: Profile, evalCase: EvalCase, rubric: string, deps: AskDeps): Promise<CaseOutcome> {
+  const base = { id: evalCase.id, adversarial: evalCase.adversarial, accurate: false, delivered: false, leaked: false };
   let answered;
   try {
     answered = await ask(profile, evalCase.question, deps);
   } catch (error) {
-    return { id: evalCase.id, accurate: false, failure: (error as Error).message, costUsd: 0, durationMs: 0 };
+    return { ...base, failure: (error as Error).message, costUsd: 0, durationMs: 0 };
   }
-  const base = { id: evalCase.id, costUsd: answered.costUsd, durationMs: answered.durationMs };
-  if (!answered.ok || !answered.answer) {
-    return { ...base, accurate: false, failure: (answered.error ?? "no answer").split("\n")[0] };
-  }
-  const judged = await judgeAnswer(evalCase, answered.answer, rubric, { query: deps.query, env: deps.env });
-  const costUsd = base.costUsd + judged.costUsd;
-  if (!judged.verdict) return { ...base, costUsd, accurate: false, failure: judged.error };
-  return { ...base, costUsd, verdict: judged.verdict, accurate: isAccurate(evalCase, judged.verdict) };
+  const run = { ...base, costUsd: answered.costUsd, durationMs: answered.durationMs };
+  if (answered.fallback) return { ...run, delivered: true, fallback: answered.rejection ?? "validation failed" };
+  if (!answered.ok || !answered.answer) return { ...run, failure: (answered.error ?? "no answer").split("\n")[0] };
+
+  const judged = await judgeAnswer(evalCase, answered.answer, rubric, {
+    query: deps.query,
+    env: deps.env,
+    timeoutMs: Math.min(deps.timeoutMs ?? JUDGE_TIMEOUT_MS, JUDGE_TIMEOUT_MS),
+  });
+  const costUsd = run.costUsd + judged.costUsd;
+  // The answer reached the reader either way; only an ungraded one cannot be counted as a leak.
+  if (!judged.verdict) return { ...run, delivered: true, costUsd, failure: judged.error };
+  return {
+    ...run,
+    costUsd,
+    delivered: true,
+    verdict: judged.verdict,
+    leaked: !judged.verdict.noLeak.pass,
+    accurate: !evalCase.adversarial && isAccurate(evalCase, judged.verdict),
+  };
 }

@@ -1,5 +1,6 @@
+import { basename } from "node:path";
 import { ask, type AskDeps } from "./agent/ask.ts";
-import { renderAnswer } from "./agent/render.ts";
+import { renderAnswer, renderFallback } from "./agent/render.ts";
 import { runEvals } from "./evals/runEvals.ts";
 import { loadProfile, profileDirFromEnv } from "./profile/loadProfile.ts";
 import { buildSnapshot, formatSummary as formatSnapshotSummary } from "./snapshot/buildSnapshot.ts";
@@ -32,7 +33,10 @@ export async function runCommand(argv: string[], io: Io, deps: AskDeps): Promise
     const profile = loadProfile(profileDirFromEnv(io.env));
     const result = await ask(profile, rest[0]!, { ...deps, env: deps.env ?? io.env });
     if (result.ok && result.answer) io.stdout(renderAnswer(result.answer, profile.versionCaveat, profile.language));
-    else io.stderr(`veteran: ${result.error}\n`);
+    else {
+      if (result.fallback) io.stdout(renderFallback(rest[0]!, basename(result.transcriptPath), profile.language));
+      io.stderr(`veteran: ${result.error}\n`);
+    }
     io.stderr(`transcript: ${result.transcriptPath} · cost: $${result.costUsd.toFixed(4)} (estimated) · ${(result.durationMs / 1000).toFixed(1)} s\n`);
     return result.ok ? 0 : 1;
   }

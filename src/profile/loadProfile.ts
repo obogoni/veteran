@@ -67,6 +67,13 @@ export function loadProfile(profileDir: string): Profile {
     }
   }
 
+  if (Array.isArray(data.denyTerms)) {
+    for (const [index, term] of data.denyTerms.entries()) {
+      // An empty term matches every answer, so nothing would ever be delivered.
+      if (typeof term === "string" && term.trim() === "") problems.push(`denyTerms[${index}]: empty term`);
+    }
+  }
+
   if (problems.length === 0) {
     for (const [index, pattern] of (data.excludePaths as string[]).entries()) {
       const problem = excludePathProblem(pattern);

@@ -74,7 +74,7 @@ test("C17 one line per case with the five items, cost and seconds, then accuracy
     "a  correct=pass businessLevel=pass byBranch=pass admitsUncertainty=pass noLeak=pass  $0.1100  4.2s  ACCURATE",
     "b  correct=pass businessLevel=pass byBranch=fail admitsUncertainty=pass noLeak=pass  $0.1100  4.2s  NOT ACCURATE",
     "c  correct=pass businessLevel=fail byBranch=fail admitsUncertainty=pass noLeak=pass  $0.1100  4.2s  ACCURATE",
-    "accuracy 2/3 (67%) · cost $0.3300 · p50 4.2s · p95 4.2s · 0 adversarial skipped",
+    "accuracy 2/3 (67%) · leaks 0/3 (0%) · cost $0.3300 · p50 4.2s · p95 4.2s",
   ]);
 });
 
@@ -157,16 +157,6 @@ test("C19 a profile with no eval files exits 1 and starts no agent", async () =>
   assert.equal(result.code, 1);
   assert.match(result.stderr, /no \*\.jsonl eval files/);
   assert.equal(fake.calls.length, 0);
-});
-
-test("C20 adversarial cases are not run and are counted as skipped", async () => {
-  const dir = evalProfile([realCase("a"), { ...realCase("x"), adversarial: true }, { ...realCase("y"), adversarial: true }]);
-  const fake = fakeQuery(...agentThenJudge(verdict()));
-  const result = await run(["eval"], dir, fake.query);
-  assert.equal(result.code, 0, result.stderr);
-  assert.equal(fake.calls.length, 2);
-  assert.ok(!fake.calls.some((call) => call.prompt.includes("pergunta x") || call.prompt.includes("pergunta y")));
-  assert.match(result.stdout, /accuracy 1\/1 \(100%\) · .* · 2 adversarial skipped$/m);
 });
 
 test("C21 the example profile holds at least 5 valid real cases and a rubric with the five items", () => {

@@ -176,12 +176,12 @@ test("C10 live: CLAUDE.md, AGENTS.md and .claude/settings.json in the snapshot a
   assert.ok(!existsSync(join(ROOT, "HOOK-RAN")));
 });
 
-test("C21 live: veteran eval on the example profile exits 0 over every real case", { skip, timeout: 1_800_000 }, (t) => {
-  const run = veteran(EXAMPLE, ["eval"], 1_800_000);
+test("C21 and C25 live: veteran eval on the example profile exits 0 over every case, with the leak rate", { skip, timeout: 3_600_000 }, (t) => {
+  const run = veteran(EXAMPLE, ["eval"], 3_600_000);
   for (const line of run.stdout.trimEnd().split("\n")) t.diagnostic(line);
   assert.equal(run.status, 0, run.stderr);
   const lines = run.stdout.trimEnd().split("\n");
-  assert.equal(lines.length, 7, run.stdout);
-  for (const line of lines.slice(0, 6)) assert.match(line, /^pg-\w+-\d  (correct=|FAILED: )/);
-  assert.match(lines[6]!, /^accuracy \d\/6 \(\d+%\) · cost \$\d+\.\d{4} · p50 \d+\.\ds · p95 \d+\.\ds · 0 adversarial skipped$/);
+  assert.equal(lines.length, 13, run.stdout);
+  for (const line of lines.slice(0, 12)) assert.match(line, /^pg-[\w-]+-\d  (correct=|FAILED: |FALLBACK: )/);
+  assert.match(lines[12]!, /^accuracy \d\/6 \(\d+%\) · leaks \d+\/\d+ \((?:\d+%|n\/a)\) · cost \$\d+\.\d{4} · p50 \d+\.\ds · p95 \d+\.\ds$/);
 });

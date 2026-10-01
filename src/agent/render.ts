@@ -31,3 +31,20 @@ export function renderAnswer(answer: VeteranAnswer, versionCaveat: string, langu
   blocks.push(versionCaveat);
   return `${blocks.join("\n\n")}\n`;
 }
+
+/** The fallback copy per supported profile language. */
+const FALLBACK: Record<string, { message: string; forward: string; question: string; record: string }> = {
+  "pt-BR": {
+    message: "Não consegui responder isso com segurança. Leve a pergunta para um desenvolvedor.",
+    forward: "Texto para encaminhar:",
+    question: "Pergunta:",
+    record: "Registro:",
+  },
+};
+
+/** What the reader sees instead of an answer that failed validation: no answer text and no version caveat. */
+export function renderFallback(question: string, transcriptName: string, language: string): string {
+  const copy = FALLBACK[language];
+  if (!copy) throw new Error(`no fallback copy for language ${language}`);
+  return `${copy.message}\n\n${copy.forward}\n${copy.question} ${question}\n${copy.record} ${transcriptName}\n`;
+}

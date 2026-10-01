@@ -238,7 +238,9 @@ test("C14 success, a limit and a timeout each leave one transcript with every me
     assert.equal(summary.question, Q, name);
     assert.equal(summary.sessionId, "sess-1", name);
     assert.equal(summary.subtype, subtype, name);
-    assert.deepEqual(summary.validation, [], name);
+    // Block 4 fills `validation` once an answer reaches it; a limit or a timeout leaves nothing to validate.
+    if (name === "success") assert.deepEqual((summary.validation as { stage: string; pass: boolean }[]).map((entry) => [entry.stage, entry.pass]), [["deterministic", true], ["judge", true]], name);
+    else assert.deepEqual(summary.validation, [], name);
     if (name === "success") assert.deepEqual(summary.answer, ANSWER);
     else assert.equal(summary.answer, null, name);
   }
