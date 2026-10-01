@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { randomInt } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { removeQuietly } from "../agent/sdk.ts";
 import { GITLEAKS, type Scanner } from "../snapshot/scan.ts";
 import type { CheckedField, Finding } from "./deterministic.ts";
 
@@ -82,7 +83,7 @@ export async function secretFindings(fields: CheckedField[], scanner: Scanner = 
     if (!canarySeen) throw new SecretScanError("gitleaks did not report the canary secret");
     return findings;
   } finally {
-    rmSync(work, { recursive: true, force: true, maxRetries: 3 });
+    removeQuietly(work);
   }
 }
 

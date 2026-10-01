@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { ask } from "../src/agent/ask.ts";
 import { renderAnswer } from "../src/agent/render.ts";
 import { loadProfile } from "../src/profile/loadProfile.ts";
-import { LEAK_VERDICT_SCHEMA } from "../src/validate/judge.ts";
+import { DISABLED_PLUGINS } from "../src/agent/sdk.ts";
 import { ANSWER, askProfile, fakeQuery, JUDGE_PASS, readTranscript, run, STUB_SCANNER, transcriptsOf, type FakeScenario } from "./fakes.ts";
 import { ROOT, tempDir } from "./helpers.ts";
 
@@ -23,8 +23,9 @@ const judgeFails = (reason: string): FakeScenario => ({ answer: { revealsImpleme
 
 test("C11 after a deterministic pass, one judge call runs isolated, with the question and the user-facing fields only", async () => {
   const dir = askProfile();
-  const fake = fakeQuery({});
-  const result = await run(["ask", Q], dir, fake.query);
+  const answer = { ...ANSWER, clarifyingQuestion: "Qual é o tipo do pedido?" };
+  const fake = fakeQuery({ answer });
+  const result = await run(["ask", Q], dir, fake.query, { env: { ANTHROPIC_API_KEY: "sk-ant-x", KEEP_ME: "1" } });
   assert.equal(result.code, 0, result.stderr);
   assert.equal(fake.judgeCalls.length, 1);
   const { prompt, options } = fake.judgeCalls[0]!;
@@ -34,15 +35,33 @@ test("C11 after a deterministic pass, one judge call runs isolated, with the que
   assert.equal(options.maxTurns, 1);
   assert.equal(options.maxBudgetUsd, 0.25);
   assert.equal(options.permissionMode, "dontAsk");
-  assert.deepEqual(options.outputFormat, { type: "json_schema", schema: LEAK_VERDICT_SCHEMA });
-  assert.deepEqual((LEAK_VERDICT_SCHEMA.required as string[]).sort(), ["reason", "revealsImplementation"]);
+  assert.deepEqual(options.outputFormat, {
+    type: "json_schema",
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["revealsImplementation", "reason"],
+      properties: { revealsImplementation: { type: "boolean" }, reason: { type: "string" } },
+    },
+  });
+  assert.deepEqual((options.settings as { enabledPlugins: unknown }).enabledPlugins, DISABLED_PLUGINS);
   assert.equal(options.hooks?.PreToolUse?.length, 1);
+  const hook = options.hooks!.PreToolUse![0]!.hooks[0]!;
+  const decide = async (tool_name: string) =>
+    ((await hook({ hook_event_name: "PreToolUse", tool_name, tool_input: { file_path: "x" } } as never, undefined, { signal: new AbortController().signal })) as {
+      hookSpecificOutput?: { permissionDecision?: string };
+    }).hookSpecificOutput?.permissionDecision;
+  assert.equal(await decide("Read"), "deny");
+  assert.equal(await decide("StructuredOutput"), undefined);
   assert.notEqual(options.cwd, join(dir, "snapshot"));
   assert.match(options.systemPrompt as string, /does this answer reveal implementation details beyond business behavior\?/);
   assert.ok(prompt.includes(Q), "the question");
-  for (const text of [ANSWER.answer, ANSWER.branches[1]!.behavior, ANSWER.suggestedTests[0]!, ANSWER.dependsOn[0]!, ANSWER.caveats[0]!]) assert.ok(prompt.includes(text), text);
+  for (const text of [answer.answer, answer.branches[0]!.condition, answer.branches[1]!.behavior, answer.suggestedTests[0]!, answer.clarifyingQuestion, answer.dependsOn[0]!, answer.caveats[0]!]) {
+    assert.ok(prompt.includes(text), text);
+  }
   assert.ok(!prompt.includes("INTERNAL-REF"), "internalReferences stays out");
-  assert.ok(!("ANTHROPIC_API_KEY" in (options.env ?? {})));
+  assert.equal(options.env?.KEEP_ME, "1");
+  assert.ok(!("ANTHROPIC_API_KEY" in options.env!));
 });
 
 test("C11 revealsImplementation true fails the attempt, and a deterministic failure runs no judge for that attempt", async () => {
@@ -193,13 +212,21 @@ test("C17 AskResult.answer is set only when the same attempt passed both stages"
 });
 
 test("C18 an agent error on attempt 1 keeps block 3's behaviour: exit 1, no judge, no regeneration, no fallback", async () => {
-  const fake = fakeQuery({ result: { subtype: "error_max_turns", is_error: true } });
-  const result = await run(["ask", Q], askProfile(), fake.query);
-  assert.equal(result.code, 1);
-  assert.equal(result.stdout, "");
-  assert.match(result.stderr, /the agent stopped: error_max_turns/);
-  assert.equal(fake.calls.length, 1);
-  assert.equal(fake.judgeCalls.length, 0);
+  const errors: [FakeScenario, RegExp][] = [
+    [{ result: { subtype: "error_max_turns", is_error: true } }, /the agent stopped: error_max_turns/],
+    [{ hang: true }, /timed out after 1 s/],
+    [{ answer: { answer: "só texto" } }, /did not match the expected schema/],
+    [{ result: { is_error: true, api_error_status: 529, result: "Overloaded" } }, /API error 529/],
+  ];
+  for (const [scenario, message] of errors) {
+    const fake = fakeQuery(scenario);
+    const result = await run(["ask", Q], askProfile(), fake.query, { timeoutMs: 600 });
+    assert.equal(result.code, 1, String(message));
+    assert.equal(result.stdout, "", String(message));
+    assert.match(result.stderr, message);
+    assert.equal(fake.calls.length, 1, String(message));
+    assert.equal(fake.judgeCalls.length, 0, String(message));
+  }
 });
 
 test("C19 the summary records every stage, attempts, fallback, the delivered answer and the summed cost; both attempts' messages are in the file", async () => {
@@ -293,4 +320,34 @@ test("C24 ask stops reading at the result message instead of waiting for the str
   assert.equal(result.code, 0, result.stderr);
   assert.ok(Date.now() - started < 10_000, `${Date.now() - started} ms`);
   assert.equal(fake.calls[0]!.options.abortController?.signal.aborted, true, "the stalled stream is closed");
+});
+
+test("C11 the agent and the judge switch off claude.ai connectors and load only the MCP servers they pass", async () => {
+  const fake = fakeQuery({});
+  await run(["ask", Q], askProfile(), fake.query);
+  for (const call of [fake.calls[0]!, fake.judgeCalls[0]!]) {
+    assert.equal(call.options.strictMcpConfig, true, String(call.options.model));
+    assert.equal(call.options.env?.ENABLE_CLAUDEAI_MCP_SERVERS, "false", String(call.options.model));
+  }
+});
+
+test("C19 a judge whose SDK child still holds its working directory does not stop the answer or the summary", { timeout: 60_000 }, async () => {
+  const dir = askProfile();
+  // Holds the judge's cwd open past the result, like the real SDK child does on Windows.
+  const holder: { child?: ReturnType<typeof spawn> } = {};
+  const fake = fakeQuery({}).judge({
+    answer: { revealsImplementation: false, reason: "ok" },
+    result: { total_cost_usd: 0, duration_ms: 0 },
+    during: async (options) => {
+      holder.child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 4000)"], { cwd: options.cwd, stdio: "ignore" });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    },
+  });
+  try {
+    const result = await run(["ask", Q], dir, fake.query);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(readTranscript(transcriptsOf(dir)[0]!).at(-1)!.type, "summary");
+  } finally {
+    holder.child?.kill();
+  }
 });

@@ -1,10 +1,10 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { VeteranAnswer } from "../agent/answerSchema.ts";
 import { boundaryHook, STRUCTURED_OUTPUT_TOOL, type Denial } from "../agent/boundary.ts";
-import { consume, hardenedOptions, initProblems, isInit, type QueryFn } from "../agent/sdk.ts";
+import { consume, hardenedOptions, initProblems, isInit, removeQuietly, type QueryFn } from "../agent/sdk.ts";
 import type { EvalCase } from "./cases.ts";
 
 export const JUDGE_MODEL = "claude-sonnet-5-5";
@@ -111,7 +111,7 @@ export async function judgeAnswer(evalCase: EvalCase, answer: VeteranAnswer, rub
     if (!isVerdict(result.structured_output)) return { error: "judge verdict did not match the schema", costUsd };
     return { verdict: result.structured_output, costUsd };
   } finally {
-    rmSync(cwd, { recursive: true, force: true, maxRetries: 3 });
+    removeQuietly(cwd);
   }
 }
 

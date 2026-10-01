@@ -1,9 +1,9 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { boundaryHook, STRUCTURED_OUTPUT_TOOL, type Denial } from "../agent/boundary.ts";
-import { consume, hardenedOptions, initProblems, isInit, type QueryFn } from "../agent/sdk.ts";
+import { consume, hardenedOptions, initProblems, isInit, removeQuietly, type QueryFn } from "../agent/sdk.ts";
 import type { CheckedField } from "./deterministic.ts";
 
 export const VALIDATION_JUDGE_MODEL = "claude-sonnet-5-5";
@@ -96,7 +96,7 @@ export async function judgeLeak(question: string, fields: CheckedField[], deps: 
     if (!isLeakVerdict(result.structured_output)) return { error: "judge verdict did not match the schema", costUsd, durationMs };
     return { verdict: result.structured_output, costUsd, durationMs };
   } finally {
-    rmSync(cwd, { recursive: true, force: true, maxRetries: 3 });
+    removeQuietly(cwd);
   }
 }
 

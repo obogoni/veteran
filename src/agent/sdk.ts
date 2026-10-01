@@ -1,5 +1,5 @@
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { realpathSync } from "node:fs";
+import { realpathSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 
 /** The shape of the SDK's `query()` that Veteran uses; tests pass a fake. */
@@ -20,7 +20,8 @@ export const DISABLED_PLUGINS: Record<string, false> = {
 };
 
 export function agentEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...source, CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1" };
+  // Connectors attached to the claude.ai account reach a session through the login, not through settings.
+  const env: Record<string, string | undefined> = { ...source, CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "false" };
   // Windows env names are case-insensitive: `anthropic_api_key` reaches a child as ANTHROPIC_API_KEY.
   for (const key of Object.keys(env)) {
     if ((STRIPPED_ENV as readonly string[]).includes(key.toUpperCase())) delete env[key];
@@ -29,9 +30,10 @@ export function agentEnv(source: NodeJS.ProcessEnv = process.env): Record<string
 }
 
 /** Options every Veteran query shares, whatever its tools. */
-export function hardenedOptions(env: NodeJS.ProcessEnv): Pick<Options, "settingSources" | "env" | "permissionMode" | "settings"> {
+export function hardenedOptions(env: NodeJS.ProcessEnv): Pick<Options, "settingSources" | "env" | "permissionMode" | "settings" | "strictMcpConfig"> {
   return {
     settingSources: [],
+    strictMcpConfig: true,
     env: agentEnv(env),
     permissionMode: "dontAsk",
     settings: { enabledPlugins: { ...DISABLED_PLUGINS } },
@@ -150,4 +152,17 @@ export async function consume(
   }
 }
 
-export const LOGIN_HINT ="Claude Code must be logged in with the Enterprise account: run `claude`, then `/login`.";
+/**
+ * Removes a judge's temporary working directory. Best effort: once a run stops at its result, the SDK
+ * child can still hold the directory for a moment, and on Windows that makes removal fail. An empty
+ * leftover directory in the OS temp dir costs nothing; failing the run over it would.
+ */
+export function removeQuietly(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch {
+    // Left for the OS to clean up.
+  }
+}
+
+export const LOGIN_HINT = "Claude Code must be logged in with the Enterprise account: run `claude`, then `/login`.";

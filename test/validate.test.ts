@@ -133,7 +133,8 @@ process.exit(42);
   assert.equal(value("--config"), join(process.cwd(), "config", "gitleaks.toml"));
   assert.deepEqual(call.ignoreEntries, []);
   assert.ok(!value("--gitleaks-ignore-path")!.startsWith(process.cwd()), "the ignore dir is a temp dir");
-  for (const flag of ["--ignore-gitleaks-allow", "--redact", "--no-banner"]) assert.ok(call.args.includes(flag), flag);
+  for (const flag of ["--ignore-gitleaks-allow", "--redact", "--no-banner", "--no-color"]) assert.ok(call.args.includes(flag), flag);
+  assert.match(call.cwd, /veteran-secrets-/, "gitleaks runs in its temp work dir, never the repository");
   assert.equal(value("--report-format"), "json");
   assert.equal(value("--exit-code"), "42");
   assert.deepEqual(call.env, []);
@@ -158,4 +159,29 @@ test("C10 an empty or blank denyTerms entry fails the profile load, with every o
       /denyTerms\[1\]: empty term/.test(error.message) && /denyTerms\[2\]: empty term/.test(error.message) && /versionCaveat: expected a non-empty string/.test(error.message),
   );
   assert.equal(loadProfile(makeProfile(tempDir("repo-unused"), { denyTerms: ["config-store"] })).denyTerms[0], "config-store");
+});
+
+test("C16 gitleaks exiting 42 without the canary, without a report or with an unreadable report reaches no verdict", async () => {
+  const dir = tempDir("broken-gitleaks");
+  const cases: [string, RegExp][] = [
+    ['writeFileSync(report, JSON.stringify([{ RuleID: "x", StartLine: 1, Match: "REDACTED" }]));', /did not report the canary/],
+    ["", /wrote no report/],
+    ['writeFileSync(report, "{not json");', /unreadable report/],
+    ["writeFileSync(report, JSON.stringify({}));", /unexpected report/],
+  ];
+  for (const [index, [body, message]] of cases.entries()) {
+    const script = join(dir, `broken-${index}.mjs`);
+    writeFileSync(
+      script,
+      [
+        'import { readFileSync, writeFileSync } from "node:fs";',
+        "const args = process.argv.slice(2);",
+        'const report = args[args.indexOf("--report-path") + 1];',
+        'readFileSync(0, "utf8");',
+        body,
+        "process.exit(42);",
+      ].join("\n"),
+    );
+    await assert.rejects(secretFindings([{ field: "answer", text: "texto" }], { command: process.execPath, prefixArgs: [script] }), message);
+  }
 });

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { loadEvalSet } from "../src/evals/cases.ts";
+import { scanForSecrets } from "../src/snapshot/scan.ts";
 import { ANSWER, askProfile, fakeQuery, run, type FakeScenario } from "./fakes.ts";
-import { ROOT } from "./helpers.ts";
+import { ROOT, tempDir } from "./helpers.ts";
 
 function verdict(overrides: Record<string, boolean> = {}) {
   const items = ["correct", "businessLevel", "byBranch", "admitsUncertainty", "noLeak"];
@@ -75,6 +75,12 @@ test("C25 the example profile holds at least 5 adversarial cases, one per tag, a
   for (const tag of ["code-request", "table-request", "secret-request", "injection", "excluded-area"]) {
     assert.ok(adversarial.some((evalCase) => evalCase.tags.includes(tag)), tag);
   }
-  const scan = spawnSync("gitleaks", ["dir", join(example, "evals"), "--config", join(ROOT, "config", "gitleaks.toml"), "--no-banner"], { encoding: "utf8" });
-  assert.equal(scan.status, 0, scan.stderr);
+});
+
+test("C25 the example's eval files hold no secret, by the snapshot's canary-checked scan", { timeout: 120_000 }, async () => {
+  const root = tempDir("evals-scan");
+  cpSync(join(ROOT, "profiles", "example", "evals"), join(root, "scan", "tree"), { recursive: true });
+  mkdirSync(join(root, "work"));
+  // Throws when gitleaks finds a secret or does not report its canary.
+  await scanForSecrets(join(root, "scan"), join(root, "work"));
 });
