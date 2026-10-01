@@ -28,7 +28,6 @@ New `src/validate/`: `deterministic.ts` (the user-facing fields and the regex ru
 | Leak rate (task) | a delivered answer leaks when the rubric's `noLeak` fails; a fallback is delivered and not leaked; the summary line is `accuracy <p>/<real> (<pct>) · leaks <l>/<delivered> (<pct>) · cost $<x> · p50 <s> · p95 <s>`; `n/a` replaces a percentage over 0 | counting caught flags as leaks |
 | Transcript `summary` additions (task) | `validation: [{ attempt, stage, pass, findings?: [{ field, rule, match }], reason?, error?, costUsd }]`, `attempts`, `fallback`; `answer` is the delivered answer; `total_cost_usd` is the sum. `subtype` and `sessionId` stay attempt 1's | one summary per attempt - the file would no longer end in exactly one summary, which block 3's criterion 14 relies on |
 | `veteran ask` process exit (found while building) | `src/cli.ts` calls `process.exit(code)` after `runCommand` settles and stdout/stderr have drained | an `unref()` on SDK handles - the SDK does not expose them |
-
 | claude.ai connectors off, fail closed (found in the live run) | `hardenedOptions` adds `strictMcpConfig: true`, and the agent env adds `ENABLE_CLAUDEAI_MCP_SERVERS=false`, for the agent and both judges. An `init` that still lists an MCP server aborts the run, as before | relying on the `init` check alone - the live run on 2026-10-01 showed some sessions loading six claude.ai connectors (`pending`/`needs-auth`), and each one aborted the run as "not isolated". The fix was added after the build, so this row came after the code |
 | Judge temp directories removed best effort (found in the live run) | `removeQuietly(dir)`: `rmSync` with 5 retries 200 ms apart, any error ignored, for both judges' working directories and the secret scan's work directory | letting the error propagate - once `ask` stops at the result (C24), the SDK child can still hold the directory on Windows. The `EPERM` escaped `ask` before the transcript summary was written. The fix was added after the build, so this row came after the code |
 
@@ -79,6 +78,7 @@ Proof: `node --test --test-name-pattern "C10 " test/validate.test.ts`
 
 **C11** - After a deterministic pass, exactly one judge call runs in the Landing shape with the question and the user-facing fields and without `internalReferences`. `revealsImplementation: true` fails the attempt, and a deterministic failure runs no judge
 Proof: `node --test --test-name-pattern "C11 " test/pipeline.test.ts`
+Proof: `node --test --test-name-pattern "C11 " test/judge.test.ts`
 
 **C12** - Both judges end within the deadline even when the SDK ignores the abort, use `maxBudgetUsd: 0.25`, report `timed out`, and `runEvals` passes `timeoutMs` to the rubric judge
 Proof: `node --test --test-name-pattern "C12 " test/judge.test.ts`

@@ -43,3 +43,10 @@ test("C12 runEvals passes its timeout to the rubric judge", async () => {
   assert.ok(Date.now() - started < 10_000, `${Date.now() - started} ms`);
   assert.match(result.stdout, /^a  FAILED: judge failed: timed out  /m);
 });
+
+test("C11 the rubric judge also switches off claude.ai connectors", async () => {
+  const fake = fakeQuery({});
+  await judgeAnswer(CASE, ANSWER, "# Rubric", { query: fake.query, env: {} });
+  assert.equal(fake.calls[0]!.options.strictMcpConfig, true);
+  assert.equal(fake.calls[0]!.options.env?.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
+});

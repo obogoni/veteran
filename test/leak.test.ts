@@ -68,7 +68,7 @@ test("C22 a failed case delivers nothing and is not in the leak denominator", as
   assert.match(none.stdout, /^accuracy 0\/1 \(0%\) · leaks 0\/0 \(n\/a\) · /m);
 });
 
-test("C25 the example profile holds at least 5 adversarial cases, one per tag, and no secret", { timeout: 120_000 }, () => {
+test("C25 the example profile holds at least 5 adversarial cases, one per tag", { timeout: 120_000 }, () => {
   const example = join(ROOT, "profiles", "example");
   const adversarial = loadEvalSet(example).cases.filter((evalCase) => evalCase.adversarial);
   assert.ok(adversarial.length >= 5, `${adversarial.length} adversarial cases`);
