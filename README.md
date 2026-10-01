@@ -6,7 +6,7 @@ The full design is in [`.design/veteran.md`](.design/veteran.md), and the roadma
 
 ## Status
 
-Blocks 1 and 3 of 8 are done: **profile + filtered snapshot** and the **headless PoC** (`veteran ask` / `veteran eval`). Block 2 (the real eval set) is paused behind block 3. Output validation (block 4) is not there yet, so an answer is not yet checked for leaks before it is printed.
+Blocks 1, 3 and 4 of 8 are done: **profile + filtered snapshot**, the **headless PoC** (`veteran ask` / `veteran eval`) and **output validation**. Block 2 (the real eval set) is being collected by the author in the real profile.
 
 What works today:
 
@@ -20,14 +20,19 @@ What works today:
   - The agent only has `Read`, `Grep` and `Glob`, and a hook denies any read outside `snapshot/`.
   - No `CLAUDE.md`, settings, skills or plugins are loaded from the snapshot or from your home.
   - Each run writes a JSONL transcript to `<VETERAN_PROFILE_DIR>/transcripts/`.
-- **`veteran eval`.** It runs the profile's eval cases through `ask`, grades each answer with a rubric judge, and reports accuracy, cost and p50/p95 latency.
-- **Example profile** over [obogoni/playground](https://github.com/obogoni/playground), in [`profiles/example/`](profiles/example/), with 6 eval cases and a rubric.
+- **Output validation.** No answer is printed before it passes two checks, and the checks fail closed.
+  - A deterministic check over every field support reads. It blocks code, file paths, identifiers with dots or parentheses, SQL, stack traces, email addresses, the profile's `denyTerms`, and secrets, which it finds by running gitleaks over the answer.
+  - Then one judge call (`claude-sonnet-5-5`, no tools) asks whether the answer reveals implementation details beyond business behaviour.
+  - An answer that fails gets one regeneration, which resumes the same agent session with the reasons as feedback.
+  - If the second answer fails too, or a check cannot reach a verdict (gitleaks missing, the judge timing out), `ask` prints a fixed fallback and an escalation text to paste to a developer, and exits `1`. Neither answer is shown.
+- **`veteran eval`.** It runs every eval case, real and adversarial, through `ask` (validation included), grades each delivered answer with a rubric judge, and reports accuracy, the leak rate, cost and p50/p95 latency.
+- **Example profile** over [obogoni/playground](https://github.com/obogoni/playground), in [`profiles/example/`](profiles/example/), with 6 real and 6 adversarial eval cases and a rubric.
 
 ## Requirements
 
 - Node.js 24 or later. TypeScript runs directly, with no build step.
 - `git` on `PATH`.
-- [gitleaks](https://github.com/gitleaks/gitleaks) 8.19 or later on `PATH` (tested with 8.30.1). On Windows: `winget install Gitleaks.Gitleaks`.
+- [gitleaks](https://github.com/gitleaks/gitleaks) 8.19 or later on `PATH` (tested with 8.30.1), for `snapshot` and also for `ask` and `eval`, which scan every answer for secrets. On Windows: `winget install Gitleaks.Gitleaks`.
 - For `ask` and `eval`: [Claude Code](https://code.claude.com) logged in on the machine (`claude`, then `/login`) with the Enterprise account. Veteran never reads an API key. It strips `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` from the agent's environment, so the run always uses the Claude Code login.
 
 ## Quick start
@@ -55,11 +60,21 @@ VETERAN_PROFILE_DIR=profiles/example node src/cli.ts ask "Posso abrir um agente 
 VETERAN_PROFILE_DIR=profiles/example node src/cli.ts eval
 ```
 
-`veteran ask` prints the answer on stdout. On stderr its last line gives the transcript path, the estimated cost and the duration. It exits `1` when the agent hits a limit (40 turns, an estimated USD 1.00, or 5 minutes) or when the answer does not match the schema.
+`veteran ask` prints the answer on stdout. On stderr its last line gives the transcript path, the estimated cost and the duration. It exits `1` when the agent hits a limit (40 turns, an estimated USD 1.00, or 5 minutes) or when the answer does not match the schema. When validation withholds the answer, stdout shows the fallback instead:
 
-`veteran eval` prints one line per case and a summary line. The summary gives accuracy, total cost and p50/p95 latency.
+```
+Não consegui responder isso com segurança. Leve a pergunta para um desenvolvedor.
 
-Cost: each `ask` stops at an **estimated USD 1.00** (the SDK's client-side estimate) and counts against the account's plan usage. An eval run costs one `ask` plus one judge call per case.
+Texto para encaminhar:
+Pergunta: <the question>
+Registro: <transcript file name>
+```
+
+stderr then names the failed stage and rule per attempt, never the matched text. The transcript keeps the rejected answers and every validation result for developers.
+
+`veteran eval` prints one line per case and a summary line: `accuracy <p>/<real> (<pct>) · leaks <l>/<delivered> (<pct>) · cost $<x> · p50 <s> · p95 <s>`. Accuracy counts only real cases. A case **leaks** when its delivered answer fails the rubric's `noLeak` item. A case that ends in the fallback prints `FALLBACK` and counts as delivered and not leaked. The pre-pilot gate is 0 leaks on the adversarial set.
+
+Cost: each agent run stops at an **estimated USD 1.00** (the SDK's client-side estimate) and counts against the account's plan usage. A regenerated answer runs the agent twice, so one `ask` can reach about USD 2.00 plus up to USD 0.25 per judge call. An eval run costs one `ask` plus one rubric judge call per case.
 
 ## Profiles
 
@@ -80,7 +95,7 @@ denyTerms: []               # internal names answers must never contain
 versionCaveat: "Behaviour of the current version; customer-specific builds may differ."
 ```
 
-`language` sets the answer language (only `pt-BR` for now). `instructions` are appended to Veteran's system prompt. `versionCaveat` closes every answer. `denyTerms` is validated now and is used from block 4 on.
+`language` sets the answer language (only `pt-BR` for now). `instructions` are appended to Veteran's system prompt. `versionCaveat` closes every answer. `denyTerms` lists internal names an answer must never contain: they are matched case-insensitively as substrings, and an empty entry is rejected.
 
 ## Eval set
 
@@ -96,7 +111,7 @@ versionCaveat: "Behaviour of the current version; customer-specific builds may d
 - `followUp` (optional) is `{ message, referenceAnswer }`, for the multi-turn spike.
 - No other field is accepted. Every problem is reported in one run as `file:line`, before any agent starts.
 
-The judge scores each answer on `correct`, `businessLevel`, `byBranch`, `admitsUncertainty` and `noLeak`. A case is accurate when `correct` passes and, for a case with expected branches, `byBranch` passes too. Adversarial cases are skipped until block 4.
+The judge scores each answer on `correct`, `businessLevel`, `byBranch`, `admitsUncertainty` and `noLeak`. A case is accurate when `correct` passes and, for a case with expected branches, `byBranch` passes too. Adversarial cases run like the rest and feed the leak rate. Their tags name the attack: `code-request`, `table-request`, `secret-request`, `injection` or `excluded-area`.
 
 `excludePaths` syntax:
 

@@ -33,7 +33,7 @@ New `src/validate/`: `deterministic.ts` (the user-facing fields and the regex ru
 
 ## Checks
 
-The check numbers match the task's criteria. Block 4's tests live in new files, because block 3 already uses `C1`-`C23` in `test/ask.test.ts` and `test/eval.test.ts`. `unit` proofs use the fake `query` and the real `gitleaks` on `PATH`. `live` proofs need `VETERAN_LIVE=1`.
+The check numbers match the task's criteria. Block 4's tests live in new files, because block 3 already uses `C1`-`C23` in `test/ask.test.ts` and `test/eval.test.ts`. `unit` proofs use the fake `query`. C7, C16 and the `live` proofs run the real `gitleaks`. Every other unit proof runs a stub scanner, a Node script that reports only the canary, because one `gitleaks` start takes 5-15 s on the author's machine (measured 2026-10-01: `gitleaks version` alone took 15 s). `live` proofs need `VETERAN_LIVE=1`.
 
 Block 3 assertions superseded by this block and changed in place, never weakened:
 - `test/ask.test.ts` "C14 ...": `validation` is `[]` only when no answer reached validation (limit, timeout). On success it holds the two passing entries (block 4 C19).

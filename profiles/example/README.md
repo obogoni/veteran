@@ -28,4 +28,4 @@ All commands run from the repository root.
    VETERAN_PROFILE_DIR=profiles/example node src/cli.ts eval
    ```
 
-   `veteran ask` prints the answer and writes a transcript to `profiles/example/transcripts/`. `veteran eval` runs the cases in [`evals/real.jsonl`](evals/real.jsonl), grades them against [`evals/rubric.md`](evals/rubric.md), and prints accuracy, cost and latency.
+   `veteran ask` prints the answer and writes a transcript to `profiles/example/transcripts/`. `veteran eval` runs the cases in [`evals/real.jsonl`](evals/real.jsonl) and [`evals/adversarial.jsonl`](evals/adversarial.jsonl), grades them against [`evals/rubric.md`](evals/rubric.md), and prints accuracy, the leak rate, cost and latency.
