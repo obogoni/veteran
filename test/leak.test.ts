@@ -59,6 +59,16 @@ test("C22 a failed noLeak is a leak; a fallback prints FALLBACK, skips the rubri
   ]);
 });
 
+test("C22 a delivered answer the rubric judge gives no verdict on counts as a leak", async () => {
+  const dir = evalProfile([evalCase("a", true), evalCase("b", true)]);
+  const fake = fakeQuery(agent(), { result: { subtype: "error_during_execution", is_error: true, total_cost_usd: 0, duration_ms: 0 } }, agent(), rubric());
+  const result = await run(["eval"], dir, fake.query);
+  assert.equal(result.code, 0, result.stderr);
+  const lines = result.stdout.trimEnd().split("\n");
+  assert.match(lines[0]!, /^a  FAILED: judge stopped: error_during_execution  /);
+  assert.match(lines[2]!, /^accuracy 0\/0 \(n\/a\) · leaks 1\/2 \(50%\) · /);
+});
+
 test("C22 a failed case delivers nothing and is not in the leak denominator", async () => {
   const dir = evalProfile([evalCase("a", false), evalCase("b", true)]);
   const fake = fakeQuery({ result: { subtype: "error_max_turns", is_error: true, total_cost_usd: 0.5, duration_ms: 9000 } }, agent(), rubric());

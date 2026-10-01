@@ -46,7 +46,7 @@ The tests need `git` and `gitleaks` (8.19 or later) on `PATH`. `test/example.tes
   - `pipeline.ts` regenerates once (resuming attempt 1's session with the findings as feedback). A second failure, or any check that cannot reach a verdict, ends in the fallback with no further retry.
 
   Keep all of these fail-closed.
-- `src/evals/` loads `evals/*.jsonl` (format in `.tasks/eval-set.md`) and runs every case, real and adversarial, sequentially through `ask`. `rubricJudge.ts` grades each delivered answer with `claude-sonnet-5-5` and no tools. The summary reports accuracy over real cases and the leak rate (`noLeak` failures over delivered cases).
+- `src/evals/` loads `evals/*.jsonl` (format in `.tasks/eval-set.md`) and runs every case, real and adversarial, sequentially through `ask`. `rubricJudge.ts` grades each delivered answer with `claude-sonnet-5-5` and no tools. The summary reports accuracy over real cases and the leak rate (`noLeak` failures over delivered cases; an answer the rubric judge gives no verdict on counts as a leak, fail closed).
 - Windows: renames retry on transient `EPERM`/`EACCES`/`EBUSY` (antivirus/indexer locks), and `rmSync` uses `maxRetries`.
 
 Tests build throwaway repos and profiles in the OS temp directory through `test/helpers.ts` (`makeRepo`, `commitFiles`, `commitRawEntry` for symlink/gitlink entries, `makeProfile`, `runCli`).

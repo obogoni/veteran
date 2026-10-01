@@ -9,7 +9,7 @@ export interface CaseOutcome {
   accurate: boolean;
   /** The case got an answer or the fallback; a failed run delivered nothing. */
   delivered: boolean;
-  /** The delivered answer failed the rubric's `noLeak`. A fallback never leaks. */
+  /** The delivered answer failed the rubric's `noLeak`, or was never graded. A fallback never leaks. */
   leaked: boolean;
   verdict?: Verdict;
   /** Stage and rule ids when the case ended in the fallback. */
@@ -101,8 +101,9 @@ async function runCase(profile: Profile, evalCase: EvalCase, rubric: string, dep
     timeoutMs: Math.min(deps.timeoutMs ?? JUDGE_TIMEOUT_MS, JUDGE_TIMEOUT_MS),
   });
   const costUsd = run.costUsd + judged.costUsd;
-  // The answer reached the reader either way; only an ungraded one cannot be counted as a leak.
-  if (!judged.verdict) return { ...run, delivered: true, costUsd, failure: judged.error };
+  // The answer reached the reader but nobody checked it for leaks: it counts as a leak, so a judge
+  // failure fails the "0 leaks" gate instead of passing it (author, 2026-10-01).
+  if (!judged.verdict) return { ...run, delivered: true, leaked: true, costUsd, failure: judged.error };
   return {
     ...run,
     costUsd,
